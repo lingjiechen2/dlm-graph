@@ -137,3 +137,9 @@ dmypy.json
 /wandb/
 /.logs/
 /.models/
+
+# Experiment logs (local results, not tracked)
+/experiments/
+
+# Claude Code
+/.claude/

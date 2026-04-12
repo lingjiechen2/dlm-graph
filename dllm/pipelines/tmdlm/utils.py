@@ -34,13 +34,16 @@ class GraphDataCollator:
     padding: bool = True
     return_tensors: str = "pt"
     label_pad_token_id: int = -100
+    position_id_type: str = "sequential"  # "sequential" (default) or "topological"
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
         b = len(features)
 
         # --- Pad input_ids and labels ---
         max_len = max(len(f["input_ids"]) for f in features)
-        input_ids = torch.full((b, max_len), self.tokenizer.pad_token_id, dtype=torch.long)
+        input_ids = torch.full(
+            (b, max_len), self.tokenizer.pad_token_id, dtype=torch.long
+        )
         labels = torch.full((b, max_len), self.label_pad_token_id, dtype=torch.long)
         attention_mask = torch.zeros(b, max_len, dtype=torch.long)
 
@@ -59,6 +62,12 @@ class GraphDataCollator:
             "attention_mask": attention_mask,
             "topology_mask": topology_mask,
         }
+
+        # --- Build topological position IDs (optional) ---
+        if self.position_id_type == "topological":
+            batch["position_ids"] = self._build_topological_position_ids(
+                features, max_len
+            )
 
         # Optional: 1-hop and 2-hop masks for TM-DLM-MS
         if all("node_spans_1hop" in f for f in features):
@@ -81,6 +90,38 @@ class GraphDataCollator:
             )  # [b, 1]
 
         return batch
+
+    def _build_topological_position_ids(
+        self,
+        features: list[dict],
+        max_len: int,
+    ) -> torch.Tensor:
+        """
+        Build position IDs where each node's tokens restart from 0.
+
+        Instead of sequential [0, 1, ..., L-1] across the entire concatenated
+        sequence, each node (target and every neighbor) gets its own position
+        IDs starting from 0.  This removes the concatenation-order bias in
+        RoPE: all neighbors are positionally "equidistant" from the target.
+
+        Tokens outside any node span (e.g. padding) get position 0.
+        """
+        b = len(features)
+        position_ids = torch.zeros(b, max_len, dtype=torch.long)
+
+        for i, f in enumerate(features):
+            spans = f.get("node_spans", [])
+            if not spans:
+                # Fallback: sequential positions
+                seq_len = len(f["input_ids"])
+                position_ids[i, :seq_len] = torch.arange(seq_len)
+                continue
+
+            for start, end in spans:
+                node_len = end - start
+                position_ids[i, start:end] = torch.arange(node_len)
+
+        return position_ids
 
     def _build_topology_mask(
         self,
@@ -113,23 +154,25 @@ class GraphDataCollator:
                 mask[i, :seq_len, :seq_len] = 1
                 continue
 
-            target_start, target_end = spans[0]  # (start, end) exclusive
+            hops = f.get("node_hops", list(range(len(spans))))
+            target_start, target_end = spans[0][0], spans[0][1]
 
-            for node_idx, (start, end) in enumerate(spans):
-                hop = f["node_hops"][node_idx] if "node_hops" in f else node_idx
+            for node_idx in range(len(spans)):
+                start, end = spans[node_idx][0], spans[node_idx][1]
+                hop = hops[node_idx]
                 if hop_limit is not None and hop > hop_limit:
                     continue
 
                 if node_idx == 0:
                     # Target node: attend to all tokens in the sequence (within valid spans)
-                    for other_start, other_end in spans:
-                        other_hop = f["node_hops"][spans.index((other_start, other_end))] \
-                            if "node_hops" in f else spans.index((other_start, other_end))
+                    for other_idx in range(len(spans)):
+                        other_hop = hops[other_idx]
                         if hop_limit is None or other_hop <= hop_limit:
-                            mask[i, start:end, other_start:other_end] = 1
+                            os, oe = spans[other_idx][0], spans[other_idx][1]
+                            mask[i, start:end, os:oe] = 1
                 else:
                     # Neighbor node: attend to self + target node tokens only
-                    mask[i, start:end, start:end] = 1                  # self
-                    mask[i, start:end, target_start:target_end] = 1    # target
+                    mask[i, start:end, start:end] = 1  # self
+                    mask[i, start:end, target_start:target_end] = 1  # target
 
         return mask

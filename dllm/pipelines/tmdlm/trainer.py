@@ -66,7 +66,7 @@ class TMDLMTrainer(MDLMTrainer):
     def _build_attention_mask(
         self,
         attention_mask: torch.Tensor | None,  # [b, l]
-        topology_mask: torch.Tensor | None,   # [b, l, l]
+        topology_mask: torch.Tensor | None,  # [b, l, l]
     ) -> torch.Tensor | None:
         """
         Combine padding attention mask with topology mask.
@@ -157,16 +157,22 @@ class TMDLMTrainer(MDLMTrainer):
         combined_mask = self._build_attention_mask(padding_mask, topology_mask)
 
         # === 5. Forward pass with topology-constrained attention ===
-        outputs = model(input_ids=noised_input_ids, attention_mask=combined_mask)
+        forward_kwargs = dict(input_ids=noised_input_ids, attention_mask=combined_mask)
+        if "position_ids" in inputs:
+            forward_kwargs["position_ids"] = inputs["position_ids"]
+        outputs = model(**forward_kwargs)
         outputs = self._postprocess_outputs(outputs)
         logits = outputs.logits  # [b, l, V]
 
         # === 6. Diffusion ELBO loss (target-node tokens only) ===
-        loss_weights = self._compute_loss_weights(t=t, inputs=inputs, masked_mask=masked_mask)
+        loss_weights = self._compute_loss_weights(
+            t=t, inputs=inputs, masked_mask=masked_mask
+        )
 
         assert (input_ids[maskable_mask] == labels[maskable_mask]).all()
 
         import torch.nn.functional as F
+
         token_nll = F.cross_entropy(
             logits.transpose(1, 2),  # [b, V, l]
             input_ids,
@@ -191,7 +197,11 @@ class TMDLMTrainer(MDLMTrainer):
         # === 7. Auxiliary classification loss on [LABEL] tokens (optional) ===
         cls_labels = inputs.get("cls_labels", None)
         label_token_indices = inputs.get("label_token_indices", None)
-        if cls_labels is not None and label_token_indices is not None and self.cls_loss_weight > 0:
+        if (
+            cls_labels is not None
+            and label_token_indices is not None
+            and self.cls_loss_weight > 0
+        ):
             # label_token_indices: [b, C] positions of the C label tokens
             # Gather logits at those positions and compute CE over class vocabulary
             label_logits = logits[
@@ -199,7 +209,17 @@ class TMDLMTrainer(MDLMTrainer):
                 label_token_indices,
             ]  # [b, C, V] -> take max over C=1 for single-token labels
             label_logits = label_logits.squeeze(1)  # [b, V] assuming C=1
-            cls_loss = F.cross_entropy(label_logits, cls_labels)
+
+            # Restrict logits to answer digit tokens ("0", "1", ..., "K-1")
+            # so cls_labels (0..K-1) correctly index into the restricted set.
+            num_classes = int(cls_labels.max().item()) + 1
+            digit_token_ids = [
+                self.processing_class.encode(str(i), add_special_tokens=False)[0]
+                for i in range(num_classes)
+            ]
+            digit_ids_tensor = torch.tensor(digit_token_ids, device=label_logits.device)
+            restricted_logits = label_logits[:, digit_ids_tensor]  # [b, K]
+            cls_loss = F.cross_entropy(restricted_logits, cls_labels)
             loss = loss + self.cls_loss_weight * cls_loss
 
         return (loss, outputs) if return_outputs else loss

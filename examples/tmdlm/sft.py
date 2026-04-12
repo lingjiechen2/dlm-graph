@@ -57,6 +57,18 @@ class DataArguments:
         default=4,
         metadata={"help": "Number of processes for dataset preprocessing"},
     )
+    mask_target_text: bool = field(
+        default=False,
+        metadata={
+            "help": "Mask all target body tokens (not just answer digit) for denser training signal"
+        },
+    )
+    position_id_type: str = field(
+        default="sequential",
+        metadata={
+            "help": "Position ID scheme: 'sequential' (default [0..L-1]) or 'topological' (per-node reset)"
+        },
+    )
 
 
 @dataclass
@@ -95,6 +107,7 @@ def train():
             max_seq_len=data_args.max_seq_len,
             max_neighbors_per_hop=data_args.max_neighbors_per_hop,
             max_hops=data_args.max_hops,
+            mask_target_text=data_args.mask_target_text,
         )
         val_dataset = load_tag_dataset(
             data_args.dataset_name,
@@ -103,6 +116,7 @@ def train():
             max_seq_len=data_args.max_seq_len,
             max_neighbors_per_hop=data_args.max_neighbors_per_hop,
             max_hops=data_args.max_hops,
+            mask_target_text=data_args.mask_target_text,
         )
 
     # --- Trainer ---
@@ -118,6 +132,7 @@ def train():
             tokenizer=tokenizer,
             padding=True,
             return_tensors="pt",
+            position_id_type=data_args.position_id_type,
         ),
     )
     trainer.train()
