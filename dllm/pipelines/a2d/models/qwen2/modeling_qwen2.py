@@ -92,8 +92,11 @@ class A2DQwen2Model(transformers.Qwen2Model):
                 )
 
             # 2) If mask is not already a 4D attention mask → convert it
+            # NOTE: When flex_attention is unavailable, BlockMask falls back to
+            # torch.Tensor, making isinstance(tensor, BlockMask) always True.
+            # We check BlockMask identity first to avoid this false positive.
             if not (
-                isinstance(attention_mask, BlockMask)
+                (BlockMask is not torch.Tensor and isinstance(attention_mask, BlockMask))
                 or (isinstance(attention_mask, torch.Tensor) and attention_mask.ndim == 4)
             ):
                 attention_mask = _prepare_4d_attention_mask(attention_mask, self.dtype)
