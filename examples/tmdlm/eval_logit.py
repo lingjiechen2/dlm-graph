@@ -1,88 +1,82 @@
 """
-TM-DLM Experiment Runner: Layer 0 and SFT evaluation on TAG datasets.
+Logit-based evaluation: single forward pass + restricted argmax / log-prob scoring.
+
+Masks answer positions, runs one (or few) forward passes, then scores each
+candidate class by its logit at the answer position(s). No iterative denoising.
 
 Usage
 -----
-Layer 0 (train-free, target-only, no neighbors):
-    CUDA_VISIBLE_DEVICES=2 python examples/tmdlm/run_experiments.py \
-        --exp baseline_no_neighbors \
+Single-token (restricted argmax):
+    CUDA_VISIBLE_DEVICES=0 python examples/tmdlm/eval_logit.py \
+        --exp baseline_cora \
         --model_name_or_path GSAI-ML/LLaDA-8B-Instruct \
         --dataset_name cora --max_hops 0
 
-Layer 0 (train-free, with neighbors, no topology mask):
-    CUDA_VISIBLE_DEVICES=2 python examples/tmdlm/run_experiments.py \
-        --exp neighbors_full_attn \
+Multi-token (mean log-prob):
+    CUDA_VISIBLE_DEVICES=0 python examples/tmdlm/eval_logit.py \
+        --exp baseline_arxiv \
         --model_name_or_path GSAI-ML/LLaDA-8B-Instruct \
-        --dataset_name cora
-
-Layer 0 (train-free, with neighbors + topology mask):
-    CUDA_VISIBLE_DEVICES=2 python examples/tmdlm/run_experiments.py \
-        --exp tmdlm_layer0 \
-        --model_name_or_path GSAI-ML/LLaDA-8B-Instruct \
-        --dataset_name cora --use_topology_mask True
+        --dataset_name ogbn-arxiv --max_hops 0 --max_answer_tokens 2
 """
 
-import argparse
 import json
 import os
 import time
+from dataclasses import dataclass, field
 from datetime import datetime
 
 import torch
 import torch.nn.functional as F
+import transformers
 from tqdm import tqdm
 
 import dllm
-from dllm.data.graph import load_tag_dataset, get_class_token_ids, DATASET_CONFIGS
+from dllm.data.graph import load_tag_dataset, get_class_token_ids
 from dllm.pipelines.tmdlm.utils import GraphDataCollator
 
 logger = dllm.utils.get_default_logger(__name__)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="TM-DLM Experiment Runner")
-    parser.add_argument(
-        "--exp", type=str, required=True, help="Experiment name for logging"
-    )
-    parser.add_argument(
-        "--model_name_or_path", type=str, default="GSAI-ML/LLaDA-8B-Instruct"
-    )
-    parser.add_argument("--dataset_name", type=str, default="cora")
-    parser.add_argument("--split", type=str, default="test")
-    parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--max_seq_len", type=int, default=2048)
-    parser.add_argument("--max_neighbors_per_hop", type=int, default=10)
-    parser.add_argument("--max_hops", type=int, default=2)
-    parser.add_argument(
-        "--denoising_steps",
-        type=int,
+@dataclass
+class EvalLogitArgs:
+    exp: str = field(metadata={"help": "Experiment name for logging"})
+    model_name_or_path: str = field(default="GSAI-ML/LLaDA-8B-Instruct")
+    dataset_name: str = field(default="cora")
+    split: str = field(default="test")
+    batch_size: int = field(default=8)
+    max_seq_len: int = field(default=2048)
+    max_neighbors_per_hop: int = field(default=10)
+    max_hops: int = field(default=2)
+    denoising_steps: int = field(
         default=1,
-        help="Number of denoising steps (1 = single forward pass)",
+        metadata={"help": "Number of denoising steps (1 = single forward pass)"},
     )
-    parser.add_argument(
-        "--use_topology_mask",
-        type=bool,
-        default=False,
-        help="Apply topology mask to attention",
+    use_topology_mask: bool = field(
+        default=False, metadata={"help": "Apply topology mask to attention"}
     )
-    parser.add_argument(
-        "--log_file", type=str, default="experiments/experiment_log.jsonl"
+    log_file: str = field(default="experiments/experiment_log.jsonl")
+    lora_path: str | None = field(
+        default=None, metadata={"help": "Path to LoRA adapter checkpoint"}
     )
-    parser.add_argument(
-        "--lora_path",
-        type=str,
-        default=None,
-        help="Path to LoRA adapter checkpoint (for evaluating fine-tuned models)",
-    )
-    parser.add_argument(
-        "--position_id_type",
-        type=str,
+    position_id_type: str = field(
         default="sequential",
-        choices=["sequential", "topological"],
-        help="Position ID scheme: sequential (default) or topological (per-node reset)",
+        metadata={
+            "help": "Position ID scheme: sequential | topological",
+            "choices": ["sequential", "topological"],
+        },
     )
-    parser.add_argument("--seed", type=int, default=42)
-    return parser.parse_args()
+    seed: int = field(default=42)
+    max_answer_tokens: int = field(
+        default=1,
+        metadata={"help": "Max answer tokens per class (1=single digit, 2=two-digit)"},
+    )
+    prompt_layout: str = field(
+        default="target_first",
+        metadata={
+            "help": "Prompt layout: target_first | neighbor_first",
+            "choices": ["target_first", "neighbor_first"],
+        },
+    )
 
 
 @torch.no_grad()
@@ -95,10 +89,11 @@ def evaluate_layer0(
     use_topology_mask=False,
     denoising_steps=1,
     position_id_type="sequential",
+    max_answer_tokens=1,
 ):
     """
-    Layer 0 evaluation: frozen model, mask ALL class-name tokens, forward pass,
-    restricted argmax over class first-token IDs at the label position.
+    Layer 0 evaluation: frozen model, mask answer tokens, forward pass,
+    classify by restricted argmax (single-token) or log-prob sum (multi-token).
 
     Returns:
         accuracy: float
@@ -107,8 +102,15 @@ def evaluate_layer0(
         predictions: list[int]
     """
     device = next(model.parameters()).device
+
     num_classes = len(class_first_token_ids)
-    class_token_ids_tensor = torch.tensor(class_first_token_ids, device=device)
+    if max_answer_tokens == 1:
+        class_token_ids_tensor = torch.tensor(class_first_token_ids, device=device)
+    else:
+        # class_first_token_ids is list[list[int]], shape [K, max_answer_tokens]
+        class_token_ids_tensor = torch.tensor(
+            class_first_token_ids, device=device, dtype=torch.long
+        )  # [K, max_answer_tokens]
 
     collator = GraphDataCollator(
         tokenizer=tokenizer,
@@ -138,7 +140,7 @@ def evaluate_layer0(
         input_ids = batch["input_ids"]  # [b, l]
         labels = batch["labels"]  # [b, l]
         cls_labels = batch["cls_labels"]  # [b]
-        label_indices = batch["label_token_indices"]  # [b, 1]
+        label_indices = batch["label_token_indices"]  # [b, max_ans_len]
         b, l = input_ids.shape
 
         # Mask ALL class-name tokens (positions where labels != -100)
@@ -172,17 +174,52 @@ def evaluate_layer0(
                 still_masked = x == tokenizer.mask_token_id
                 x = torch.where(still_masked, pred_tokens, x)
 
-        # Extract logits at the first label-token position
-        label_logits = logits[
-            torch.arange(b, device=device).unsqueeze(1),
-            label_indices,
-        ].squeeze(
-            1
-        )  # [b, V]
+        if max_answer_tokens == 1:
+            # Single-token: restricted argmax over class token IDs
+            label_logits = logits[
+                torch.arange(b, device=device).unsqueeze(1),
+                label_indices,
+            ].squeeze(
+                1
+            )  # [b, V]
+            restricted_logits = label_logits[:, class_token_ids_tensor]  # [b, K]
+            preds = restricted_logits.argmax(dim=-1)  # [b]
+        else:
+            # Multi-token: sum log-probs across answer positions per class
+            # label_indices: [b, max_ans_len]
+            # class_token_ids_tensor: [K, max_ans_len]
+            ans_len = label_indices.shape[1]
+            log_probs = F.log_softmax(logits, dim=-1)  # [b, l, V]
 
-        # Restricted argmax: only consider class-name first tokens
-        restricted_logits = label_logits[:, class_token_ids_tensor]  # [b, num_classes]
-        preds = restricted_logits.argmax(dim=-1)  # [b] class indices
+            # Gather log-probs at answer positions: [b, max_ans_len, V]
+            pos_expanded = label_indices.unsqueeze(-1).expand(-1, -1, logits.shape[-1])
+            ans_log_probs = log_probs.gather(1, pos_expanded)  # [b, max_ans_len, V]
+
+            # For each class k, gather log-probs for its tokens: [b, K]
+            # class_token_ids_tensor: [K, max_ans_len] -> expand to [b, K, max_ans_len]
+            K = class_token_ids_tensor.shape[0]
+            cls_ids = class_token_ids_tensor.unsqueeze(0).expand(
+                b, -1, -1
+            )  # [b, K, max_ans_len]
+
+            # ans_log_probs: [b, max_ans_len, V] -> for each position, gather the K class tokens
+            scores = torch.zeros(b, K, device=device)
+            # Build validity mask: position j is valid if token != 0 (padding)
+            cls_valid = class_token_ids_tensor != 0  # [K, max_ans_len]
+
+            for j in range(ans_len):
+                pos_logprobs = ans_log_probs[:, j, :]  # [b, V]
+                cls_tokens_j = cls_ids[:, :, j]  # [b, K]
+                token_scores = pos_logprobs.gather(1, cls_tokens_j)  # [b, K]
+                # Only add score if this position is valid for the class
+                valid_j = cls_valid[:, j].unsqueeze(0).expand(b, -1)  # [b, K]
+                scores += token_scores * valid_j.float()
+
+            # Normalize by number of valid tokens per class (mean log-prob)
+            cls_lengths = cls_valid.sum(dim=1).float().clamp(min=1)  # [K]
+            scores = scores / cls_lengths.unsqueeze(0)  # [b, K]
+
+            preds = scores.argmax(dim=-1)  # [b]
 
         all_predictions.extend(preds.cpu().tolist())
 
@@ -200,7 +237,8 @@ def evaluate_layer0(
 
 
 def main():
-    args = parse_args()
+    parser = transformers.HfArgumentParser(EvalLogitArgs)
+    (args,) = parser.parse_args_into_dataclasses()
 
     # Resolve model path
     model_path = dllm.utils.resolve_with_base_env(
@@ -229,25 +267,26 @@ def main():
 
     # Get class token IDs
     class_names, class_first_token_ids = get_class_token_ids(
-        args.dataset_name, tokenizer
+        args.dataset_name, tokenizer, max_answer_tokens=args.max_answer_tokens
     )
     logger.info("Class names: %s", class_names)
-    logger.info("Class first token IDs: %s", class_first_token_ids)
+    logger.info("Class token IDs: %s", class_first_token_ids)
 
-    # Verify token IDs are unique
-    if len(set(class_first_token_ids)) != len(class_first_token_ids):
-        logger.warning(
-            "WARNING: Some classes share the same first token ID! "
-            "Classification will be ambiguous."
-        )
-        for i, (name, tid) in enumerate(zip(class_names, class_first_token_ids)):
-            logger.info(
-                "  Class %d: '%s' -> token %d ('%s')",
-                i,
-                name,
-                tid,
-                tokenizer.decode([tid]),
+    # Verify token IDs are unique (only for single-token mode)
+    if args.max_answer_tokens == 1:
+        if len(set(class_first_token_ids)) != len(class_first_token_ids):
+            logger.warning(
+                "WARNING: Some classes share the same first token ID! "
+                "Classification will be ambiguous."
             )
+            for i, (name, tid) in enumerate(zip(class_names, class_first_token_ids)):
+                logger.info(
+                    "  Class %d: '%s' -> token %d ('%s')",
+                    i,
+                    name,
+                    tid,
+                    tokenizer.decode([tid]),
+                )
 
     # Load test dataset
     logger.info("Loading %s %s split...", args.dataset_name, args.split)
@@ -259,6 +298,8 @@ def main():
         max_neighbors_per_hop=args.max_neighbors_per_hop,
         max_hops=args.max_hops,
         seed=args.seed,
+        max_answer_tokens=args.max_answer_tokens,
+        prompt_layout=args.prompt_layout,
     )
     logger.info("Loaded %d samples", len(test_dataset))
 
@@ -286,6 +327,7 @@ def main():
         use_topology_mask=args.use_topology_mask,
         denoising_steps=args.denoising_steps,
         position_id_type=args.position_id_type,
+        max_answer_tokens=args.max_answer_tokens,
     )
     elapsed = time.time() - t_start
 
@@ -336,6 +378,7 @@ def main():
             "denoising_steps": args.denoising_steps,
             "use_topology_mask": args.use_topology_mask,
             "lora_path": args.lora_path,
+            "prompt_layout": args.prompt_layout,
         },
         "elapsed_seconds": round(elapsed, 1),
     }

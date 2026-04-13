@@ -85,9 +85,21 @@ class GraphDataCollator:
                 [f["cls_label"] for f in features], dtype=torch.long
             )
         if all("label_token_pos" in f for f in features):
+            max_ans_len = max(f.get("answer_len", 1) for f in features)
+            label_indices = []
+            for f in features:
+                start = f["label_token_pos"]
+                ans_len = f.get("answer_len", 1)
+                # positions for each answer token, pad with 0 for shorter answers
+                positions = list(range(start, start + ans_len))
+                positions += [0] * (max_ans_len - ans_len)
+                label_indices.append(positions)
             batch["label_token_indices"] = torch.tensor(
-                [[f["label_token_pos"]] for f in features], dtype=torch.long
-            )  # [b, 1]
+                label_indices, dtype=torch.long
+            )  # [b, max_ans_len]
+            batch["answer_lens"] = torch.tensor(
+                [f.get("answer_len", 1) for f in features], dtype=torch.long
+            )  # [b]
 
         return batch
 

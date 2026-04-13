@@ -46,7 +46,9 @@ class EvalArguments(dllm.utils.ModelArguments):
     )
     train_free: bool = field(
         default=False,
-        metadata={"help": "Skip fine-tuning; use frozen pretrained model (Layer 0 eval)"},
+        metadata={
+            "help": "Skip fine-tuning; use frozen pretrained model (Layer 0 eval)"
+        },
     )
     batch_size: int = field(default=16)
     max_seq_len: int = field(default=2048)
@@ -54,7 +56,16 @@ class EvalArguments(dllm.utils.ModelArguments):
     max_hops: int = field(default=2)
     use_multiscale: bool = field(
         default=False,
-        metadata={"help": "Enable TM-DLM-MS multi-scale topology mask during inference"},
+        metadata={
+            "help": "Enable TM-DLM-MS multi-scale topology mask during inference"
+        },
+    )
+    prompt_layout: str = field(
+        default="target_first",
+        metadata={
+            "help": "Prompt layout: target_first | neighbor_first",
+            "choices": ["target_first", "neighbor_first"],
+        },
     )
 
 
@@ -76,6 +87,7 @@ def evaluate():
         max_seq_len=args.max_seq_len,
         max_neighbors_per_hop=args.max_neighbors_per_hop,
         max_hops=args.max_hops,
+        prompt_layout=args.prompt_layout,
     )
 
     collator = GraphDataCollator(tokenizer=tokenizer, padding=True, return_tensors="pt")
@@ -102,7 +114,10 @@ def evaluate():
     total = 0
 
     for batch in tqdm(dataloader, desc=f"Evaluating {args.dataset_name}"):
-        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+        batch = {
+            k: v.to(device) if isinstance(v, torch.Tensor) else v
+            for k, v in batch.items()
+        }
 
         preds = sampler.classify(
             input_ids=batch["input_ids"],
@@ -122,7 +137,13 @@ def evaluate():
         total += cls_labels.shape[0]
 
     accuracy = 100.0 * correct / total
-    logger.info("Accuracy on %s test set: %.2f%%  (%d/%d)", args.dataset_name, accuracy, correct, total)
+    logger.info(
+        "Accuracy on %s test set: %.2f%%  (%d/%d)",
+        args.dataset_name,
+        accuracy,
+        correct,
+        total,
+    )
     return accuracy
 
 

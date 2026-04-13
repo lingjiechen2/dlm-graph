@@ -50,11 +50,63 @@ DATASET_CONFIGS = {
         "val_size": 500,
         "test_size": 1000,
     },
+    "ogbn-arxiv": {
+        "ogb_root": HF_CACHE_ROOT / "ogb___ogbn-arxiv" / "ogbn_arxiv",
+        "num_classes": 40,
+        # Full category names (mapped from labelidx2arxivcategory.csv.gz order)
+        "class_names": [
+            "Numerical Analysis",  # 0: cs.NA
+            "Multimedia",  # 1: cs.MM
+            "Logic in Computer Science",  # 2: cs.LO
+            "Computers and Society",  # 3: cs.CY
+            "Cryptography and Security",  # 4: cs.CR
+            "Distributed, Parallel, and Cluster Computing",  # 5: cs.DC
+            "Human-Computer Interaction",  # 6: cs.HC
+            "Computational Engineering, Finance, and Science",  # 7: cs.CE
+            "Networking and Internet Architecture",  # 8: cs.NI
+            "Computational Complexity",  # 9: cs.CC
+            "Artificial Intelligence",  # 10: cs.AI
+            "Multiagent Systems",  # 11: cs.MA
+            "General Literature",  # 12: cs.GL
+            "Neural and Evolutionary Computing",  # 13: cs.NE
+            "Symbolic Computation",  # 14: cs.SC
+            "Hardware Architecture",  # 15: cs.AR
+            "Computer Vision and Pattern Recognition",  # 16: cs.CV
+            "Graphics",  # 17: cs.GR
+            "Emerging Technologies",  # 18: cs.ET
+            "Systems and Control",  # 19: cs.SY
+            "Computational Geometry",  # 20: cs.CG
+            "Other Computer Science",  # 21: cs.OH
+            "Programming Languages",  # 22: cs.PL
+            "Software Engineering",  # 23: cs.SE
+            "Machine Learning",  # 24: cs.LG
+            "Sound",  # 25: cs.SD
+            "Social and Information Networks",  # 26: cs.SI
+            "Robotics",  # 27: cs.RO
+            "Information Theory",  # 28: cs.IT
+            "Performance",  # 29: cs.PF
+            "Computation and Language",  # 30: cs.CL
+            "Information Retrieval",  # 31: cs.IR
+            "Mathematical Software",  # 32: cs.MS
+            "Formal Languages and Automata Theory",  # 33: cs.FL
+            "Data Structures and Algorithms",  # 34: cs.DS
+            "Operating Systems",  # 35: cs.OS
+            "Computer Science and Game Theory",  # 36: cs.GT
+            "Databases",  # 37: cs.DB
+            "Digital Libraries",  # 38: cs.DL
+            "Discrete Mathematics",  # 39: cs.DM
+        ],
+    },
 }
 
 # Neighbor sampling config (aligned with LLaGA)
 MAX_NEIGHBORS_PER_HOP = 10
 MAX_HOPS = 2
+
+
+# ---------------------------------------------------------------------------
+# Graph utilities
+# ---------------------------------------------------------------------------
 
 
 def _build_adjacency(edge_index: np.ndarray) -> dict[int, list[int]]:
@@ -112,6 +164,22 @@ def _sample_khop_neighbors(
     return neighbor_ids, neighbor_hops
 
 
+# ---------------------------------------------------------------------------
+# Prompt / sample construction
+# ---------------------------------------------------------------------------
+
+
+def get_answer_labels(num_classes: int) -> list[str]:
+    """
+    Generate answer labels for MC format.
+
+    Always uses numeric labels: "0", "1", ..., "N-1".
+    For ≤10 classes these are single tokens; for >10 they are multi-token
+    but still natural MC answers that LLMs handle well.
+    """
+    return [str(i) for i in range(num_classes)]
+
+
 def build_node_sample(
     target_node_text: str,
     neighbor_texts: list[str],
@@ -121,70 +189,114 @@ def build_node_sample(
     tokenizer,
     max_seq_len: int = 2048,
     mask_target_text: bool = False,
+    answer_labels: Optional[list[str]] = None,
+    max_answer_tokens: int = 1,
+    prompt_layout: str = "target_first",
 ) -> dict:
     """
     Build a single TM-DLM training sample for one target node.
 
-    Uses a multiple-choice format with single-digit answer to avoid
-    multi-token class name issues:
+    Uses a multiple-choice format. Layout controlled by ``prompt_layout``:
 
+    target_first (default):
         Paper: <target_text>
-        Options: 0) Case Based 1) Genetic Algorithms ... 6) Theory
-        Answer: <digit>
+        Options: 0) Case Based ... 6) Theory
+        Answer: <answer>
         Neighbor 1: <nb1_text>
         ...
 
-    The target span (including options and answer) is node_spans[0] with hop=0.
-    Each neighbor is a separate span with its hop distance.
+    neighbor_first:
+        Neighbor 1: <nb1_text>
+        ...
+        Paper: <target_text>
+        Options: 0) Case Based ... 6) Theory
+        Answer: <answer>
 
-    Labels are -100 everywhere EXCEPT at the answer digit position.
+    Labels are -100 everywhere EXCEPT at the answer token positions.
     """
 
     def _tok(text: str) -> list[int]:
         return tokenizer.encode(text, add_special_tokens=False)
 
     # --- Build options string ---
-    options_str = " ".join(f"{i}) {name}" for i, name in enumerate(class_names))
-    answer_str = str(cls_label)
+    if answer_labels is None:
+        answer_labels = get_answer_labels(len(class_names))
+    options_str = " ".join(
+        f"{answer_labels[i]}) {name}" for i, name in enumerate(class_names)
+    )
+
+    # --- Build answer tokens ---
+    answer_str = answer_labels[cls_label]
+    answer_tokens = _tok(answer_str)[:max_answer_tokens]
 
     # --- Tokenize target section ---
     target_prefix = _tok("Paper: ")
     target_body = _tok(target_node_text)
     options_prefix = _tok(f"\nOptions: {options_str}\nAnswer: ")
-    answer_tokens = _tok(answer_str)  # single digit → typically 1 token
 
     # Reserve space: target gets up to half of max_seq_len
     overhead = len(target_prefix) + len(options_prefix) + len(answer_tokens)
     target_body_budget = max(max_seq_len // 2 - overhead, 50)
     target_body = target_body[:target_body_budget]
 
-    # Build target + options + answer section
-    input_ids = target_prefix + target_body + options_prefix + answer_tokens
-    label_token_pos = len(target_prefix) + len(target_body) + len(options_prefix)
-    target_span_end = len(input_ids)
-
-    node_spans = [[0, target_span_end]]
-    node_hops_out = [0]
+    # Target section as a unit
+    target_section = target_prefix + target_body + options_prefix + answer_tokens
+    target_section_len = len(target_section)
+    answer_offset_in_target = (
+        len(target_prefix) + len(target_body) + len(options_prefix)
+    )
 
     # --- Tokenize neighbor sections ---
     num_neighbors = len(neighbor_texts)
-    remaining_budget = max_seq_len - len(input_ids)
+    remaining_budget = max_seq_len - target_section_len
     per_nb_budget = (
         max(remaining_budget // max(num_neighbors, 1), 20) if num_neighbors > 0 else 0
     )
 
+    nb_token_list = []
     for i, (nb_text, hop) in enumerate(zip(neighbor_texts, neighbor_hops)):
-        if len(input_ids) >= max_seq_len:
-            break
-
         nb_prefix = _tok(f"\nNeighbor {i + 1}: ")
         nb_body = _tok(nb_text)
         nb_ids = (nb_prefix + nb_body)[:per_nb_budget]
+        nb_token_list.append((nb_ids, hop))
 
-        start = len(input_ids)
-        input_ids.extend(nb_ids)
-        node_spans.append([start, len(input_ids)])
-        node_hops_out.append(hop)
+    # --- Assemble based on layout ---
+    if prompt_layout == "neighbor_first":
+        input_ids = []
+        nb_spans = []
+        nb_hops = []
+        max_nb_total = max_seq_len - target_section_len
+
+        for nb_ids, hop in nb_token_list:
+            if len(input_ids) + len(nb_ids) > max_nb_total:
+                break
+            start = len(input_ids)
+            input_ids.extend(nb_ids)
+            nb_spans.append([start, len(input_ids)])
+            nb_hops.append(hop)
+
+        # Append target section after neighbors
+        target_start = len(input_ids)
+        label_token_pos = target_start + answer_offset_in_target
+        input_ids.extend(target_section)
+
+        # Target is always first in node_spans (hop=0)
+        node_spans = [[target_start, len(input_ids)]] + nb_spans
+        node_hops_out = [0] + nb_hops
+    else:
+        # "target_first" (default)
+        input_ids = list(target_section)
+        label_token_pos = answer_offset_in_target
+        node_spans = [[0, target_section_len]]
+        node_hops_out = [0]
+
+        for nb_ids, hop in nb_token_list:
+            if len(input_ids) >= max_seq_len:
+                break
+            start = len(input_ids)
+            input_ids.extend(nb_ids)
+            node_spans.append([start, len(input_ids)])
+            node_hops_out.append(hop)
 
     # Enforce max_seq_len
     input_ids = input_ids[:max_seq_len]
@@ -192,9 +304,12 @@ def build_node_sample(
     # --- Labels: -100 everywhere except masked positions ---
     labels = [-100] * len(input_ids)
     if mask_target_text:
-        # Mask all target body + answer tokens (dense training signal)
-        target_body_start = len(target_prefix)
-        target_body_end = len(target_prefix) + len(target_body)
+        if prompt_layout == "neighbor_first":
+            target_body_start = target_start + len(target_prefix)
+            target_body_end = target_start + len(target_prefix) + len(target_body)
+        else:
+            target_body_start = len(target_prefix)
+            target_body_end = len(target_prefix) + len(target_body)
         for pos in range(target_body_start, min(target_body_end, len(labels))):
             labels[pos] = input_ids[pos]
     # Always include answer digit in labels
@@ -210,25 +325,122 @@ def build_node_sample(
         "node_hops": node_hops_out,
         "cls_label": cls_label,
         "label_token_pos": label_token_pos,
+        "answer_len": len(answer_tokens),
     }
 
 
-def _load_pubmed_from_tape(config: dict, split: str, seed: int = 42):
-    """
-    Load PubMed data from local TAPE files (tab + JSON + citations).
+def _build_tag_samples(
+    split_ids: list[int],
+    node_data: dict[int, dict],
+    adj: dict[int, list[int]],
+    class_names: list[str],
+    tokenizer,
+    max_seq_len: int,
+    max_neighbors_per_hop: int,
+    max_hops: int,
+    seed: int,
+    mask_target_text: bool,
+    max_answer_tokens: int,
+    prompt_layout: str,
+) -> list[dict]:
+    """Build TM-DLM samples for a list of node IDs (shared across all datasets)."""
+    answer_labels = get_answer_labels(len(class_names))
+    rng = random.Random(seed)
+    samples = []
 
-    Returns:
-        node_data: dict[int, dict] with title, abstract, label for ALL nodes
-        adj: adjacency list
-        class_names: list of class name strings
-        split_ids: list of node IDs for the requested split
-    """
+    for node_id in split_ids:
+        if node_id not in node_data:
+            continue
+        info = node_data[node_id]
+
+        nb_ids, nb_hops = _sample_khop_neighbors(
+            adj, node_id, max_neighbors_per_hop, max_hops, rng
+        )
+
+        neighbor_texts = []
+        neighbor_hops = []
+        for nb_id, hop in zip(nb_ids, nb_hops):
+            if nb_id in node_data:
+                nd = node_data[nb_id]
+                neighbor_texts.append(f"{nd['title']}. {nd['abstract']}")
+                neighbor_hops.append(hop)
+
+        target_text = f"{info['title']}. {info['abstract']}"
+
+        result = build_node_sample(
+            target_node_text=target_text,
+            neighbor_texts=neighbor_texts,
+            neighbor_hops=neighbor_hops,
+            cls_label=info["label"],
+            class_names=class_names,
+            tokenizer=tokenizer,
+            max_seq_len=max_seq_len,
+            mask_target_text=mask_target_text,
+            answer_labels=answer_labels,
+            max_answer_tokens=max_answer_tokens,
+            prompt_layout=prompt_layout,
+        )
+        samples.append(result)
+
+    return samples
+
+
+# ---------------------------------------------------------------------------
+# Dataset-specific data loaders (each returns node_data, adj, class_names, split_ids)
+# ---------------------------------------------------------------------------
+
+
+def _load_cora_data(
+    config: dict,
+    split: str,
+    seed: int,
+) -> tuple[dict, dict, list[str], list[int]]:
+    """Load Cora data from HuggingFace TAPE + PyG Planetoid."""
+    split_map = {"train": "train", "val": "validation", "test": "test"}
+    hf_split = split_map[split]
+
+    tape_ds = load_dataset(
+        config["hf_path"],
+        cache_dir=str(config["cache_dir"]),
+    )
+
+    # Build full text lookup
+    node_data: dict[int, dict] = {}
+    label_to_class: dict[int, str] = {}
+    for s in tape_ds:
+        for sample in tape_ds[s]:
+            node_data[sample["id"]] = {
+                "title": sample["T"],
+                "abstract": sample["A"],
+                "label": sample["label"],
+            }
+            label_to_class[sample["label"]] = sample["class"]
+
+    class_names = [label_to_class[i] for i in range(len(label_to_class))]
+
+    # Graph structure
+    from torch_geometric.datasets import Planetoid
+
+    pyg_ds = Planetoid(root=str(config["pyg_root"]), name=config["pyg_name"])
+    adj = _build_adjacency(pyg_ds[0].edge_index.numpy())
+
+    split_ids = [sample["id"] for sample in tape_ds[hf_split]]
+
+    return node_data, adj, class_names, split_ids
+
+
+def _load_pubmed_data(
+    config: dict,
+    split: str,
+    seed: int,
+) -> tuple[dict, dict, list[str], list[int]]:
+    """Load PubMed data from local TAPE files (tab + JSON + citations)."""
     import json as _json
 
     tape_dir = Path(config["tape_dir"])
     class_names = config["class_names"]
 
-    # 1. Parse node file: position → (pmid, label)
+    # 1. Parse node file: position -> (pmid, label)
     node_file = tape_dir / "data" / "Pubmed-Diabetes.NODE.paper.tab"
     with open(node_file) as f:
         lines = f.readlines()
@@ -238,7 +450,7 @@ def _load_pubmed_from_tape(config: dict, split: str, seed: int = 42):
     for i, line in enumerate(lines[2:]):
         parts = line.strip().split("\t")
         pmid = int(parts[0])
-        label = int(parts[1].split("=")[1]) - 1  # 1-3 → 0-2
+        label = int(parts[1].split("=")[1]) - 1  # 1-3 -> 0-2
         node_data[i] = {"pmid": pmid, "label": label, "title": "", "abstract": ""}
         all_ids.append(i)
 
@@ -312,6 +524,99 @@ def _load_pubmed_from_tape(config: dict, split: str, seed: int = 42):
     return node_data, adj, class_names, split_map[split]
 
 
+def _load_ogbn_arxiv_data(
+    config: dict,
+    split: str,
+    seed: int,
+) -> tuple[dict, dict, list[str], list[int]]:
+    """Load ogbn-arxiv data from OGB files + titleabs.tsv."""
+    import gzip
+    import csv
+
+    ogb_root = Path(config["ogb_root"])
+
+    # 1. Load node index -> paper ID mapping
+    mapping_file = ogb_root / "mapping" / "nodeidx2paperid.csv.gz"
+    nodeidx_to_paperid = {}
+    with gzip.open(mapping_file, "rt") as f:
+        reader = csv.reader(f)
+        next(reader)  # skip header
+        for row in reader:
+            nodeidx_to_paperid[int(row[0])] = int(row[1])
+
+    # 2. Load paper ID -> (title, abstract) from titleabs.tsv
+    titleabs_file = ogb_root / "raw" / "titleabs.tsv"
+    paperid_to_text = {}
+    with open(titleabs_file) as f:
+        for line in f:
+            parts = line.strip().split("\t")
+            if len(parts) >= 3:
+                paperid_to_text[int(parts[0])] = {
+                    "title": parts[1],
+                    "abstract": parts[2],
+                }
+            elif len(parts) == 2:
+                paperid_to_text[int(parts[0])] = {
+                    "title": parts[1],
+                    "abstract": "",
+                }
+
+    # 3. Load node labels
+    label_file = ogb_root / "raw" / "node-label.csv.gz"
+    node_labels = {}
+    with gzip.open(label_file, "rt") as f:
+        for idx, line in enumerate(f):
+            node_labels[idx] = int(line.strip())
+
+    # 4. Class names
+    class_names = config["class_names"]
+
+    # 5. Load edges
+    edge_file = ogb_root / "raw" / "edge.csv.gz"
+    src_list, dst_list = [], []
+    with gzip.open(edge_file, "rt") as f:
+        for line in f:
+            parts = line.strip().split(",")
+            s, d = int(parts[0]), int(parts[1])
+            src_list.extend([s, d])
+            dst_list.extend([d, s])
+    edge_index = np.array([src_list, dst_list])
+    adj = _build_adjacency(edge_index)
+
+    # 6. Load split
+    split_name = {"train": "train", "val": "valid", "test": "test"}[split]
+    split_file = ogb_root / "split" / "time" / f"{split_name}.csv.gz"
+    split_ids = []
+    with gzip.open(split_file, "rt") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("node"):
+                split_ids.append(int(line))
+
+    # 7. Build node_data lookup
+    node_data = {}
+    for node_idx, paper_id in nodeidx_to_paperid.items():
+        text_info = paperid_to_text.get(paper_id, {"title": "", "abstract": ""})
+        node_data[node_idx] = {
+            "title": text_info["title"],
+            "abstract": text_info["abstract"],
+            "label": node_labels.get(node_idx, 0),
+        }
+
+    return node_data, adj, class_names, split_ids
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+_DATA_LOADERS = {
+    "cora": _load_cora_data,
+    "pubmed": _load_pubmed_data,
+    "ogbn-arxiv": _load_ogbn_arxiv_data,
+}
+
+
 def load_tag_dataset(
     dataset_name: str,
     tokenizer,
@@ -321,172 +626,63 @@ def load_tag_dataset(
     max_hops: int = MAX_HOPS,
     seed: int = 42,
     mask_target_text: bool = False,
+    max_answer_tokens: int = 1,
+    prompt_layout: str = "target_first",
 ) -> Dataset:
     """
     Load a TAG dataset and return a HuggingFace Dataset of TM-DLM samples.
 
-    Supports: "cora" (from HuggingFace + PyG), "pubmed" (from local TAPE files).
+    Supports: "cora", "pubmed", "ogbn-arxiv".
     """
     if dataset_name not in DATASET_CONFIGS:
         raise ValueError(
             f"Unknown dataset: {dataset_name}. Supported: {list(DATASET_CONFIGS.keys())}"
         )
 
-    config = DATASET_CONFIGS[dataset_name]
-
-    if dataset_name == "pubmed":
-        return _load_pubmed_tag_dataset(
-            config,
-            tokenizer,
-            split,
-            max_seq_len,
-            max_neighbors_per_hop,
-            max_hops,
-            seed,
-            mask_target_text,
-        )
-
-    # --- Cora path (HuggingFace + PyG) ---
-    split_map = {"train": "train", "val": "validation", "test": "test"}
-    hf_split = split_map[split]
-
-    # --- 1. Load TAPE text data ---
-    tape_ds = load_dataset(
-        config["hf_path"],
-        cache_dir=str(config["cache_dir"]),
+    node_data, adj, class_names, split_ids = _DATA_LOADERS[dataset_name](
+        DATASET_CONFIGS[dataset_name], split, seed
     )
 
-    # Build full text lookup: node_id -> info
-    node_data: dict[int, dict] = {}
-    for s in tape_ds:
-        for sample in tape_ds[s]:
-            node_data[sample["id"]] = {
-                "title": sample["T"],
-                "abstract": sample["A"],
-                "label": sample["label"],
-                "class_name": sample["class"],
-            }
-
-    # --- 2. Load graph structure from PyG Planetoid ---
-    from torch_geometric.datasets import Planetoid
-
-    pyg_root = str(config["pyg_root"])
-    pyg_ds = Planetoid(root=pyg_root, name=config["pyg_name"])
-    edge_index = pyg_ds[0].edge_index.numpy()
-
-    # --- 3. Build adjacency ---
-    adj = _build_adjacency(edge_index)
-
-    # --- 4. Build class-name list (sorted by class index) ---
-    label_to_class = {}
-    for info in node_data.values():
-        label_to_class[info["label"]] = info["class_name"]
-    class_names = [label_to_class[i] for i in range(len(label_to_class))]
-
-    # --- 5. Process each node in target split ---
-    rng = random.Random(seed)
-    samples = []
-
-    for sample in tape_ds[hf_split]:
-        node_id = sample["id"]
-        info = node_data[node_id]
-
-        nb_ids, nb_hops = _sample_khop_neighbors(
-            adj, node_id, max_neighbors_per_hop, max_hops, rng
-        )
-
-        neighbor_texts = []
-        neighbor_hops = []
-        for nb_id, hop in zip(nb_ids, nb_hops):
-            if nb_id in node_data:
-                nd = node_data[nb_id]
-                neighbor_texts.append(f"{nd['title']}. {nd['abstract']}")
-                neighbor_hops.append(hop)
-
-        target_text = f"{info['title']}. {info['abstract']}"
-
-        result = build_node_sample(
-            target_node_text=target_text,
-            neighbor_texts=neighbor_texts,
-            neighbor_hops=neighbor_hops,
-            cls_label=info["label"],
-            class_names=class_names,
-            tokenizer=tokenizer,
-            max_seq_len=max_seq_len,
-            mask_target_text=mask_target_text,
-        )
-        samples.append(result)
+    samples = _build_tag_samples(
+        split_ids,
+        node_data,
+        adj,
+        class_names,
+        tokenizer,
+        max_seq_len,
+        max_neighbors_per_hop,
+        max_hops,
+        seed,
+        mask_target_text,
+        max_answer_tokens,
+        prompt_layout,
+    )
 
     dataset = Dataset.from_list(samples)
     dataset.info.description = (
-        f"TM-DLM {dataset_name} ({split}), classes: {class_names}"
+        f"TM-DLM {dataset_name} ({split}), {len(class_names)} classes"
     )
     return dataset
 
 
-def _load_pubmed_tag_dataset(
-    config,
-    tokenizer,
-    split,
-    max_seq_len,
-    max_neighbors_per_hop,
-    max_hops,
-    seed,
-    mask_target_text,
-) -> Dataset:
-    """Load PubMed TAG dataset from local TAPE files."""
-    node_data, adj, class_names, split_ids = _load_pubmed_from_tape(config, split, seed)
-
-    rng = random.Random(seed)
-    samples = []
-
-    for node_id in split_ids:
-        info = node_data[node_id]
-
-        nb_ids, nb_hops = _sample_khop_neighbors(
-            adj, node_id, max_neighbors_per_hop, max_hops, rng
-        )
-
-        neighbor_texts = []
-        neighbor_hops = []
-        for nb_id, hop in zip(nb_ids, nb_hops):
-            if nb_id in node_data:
-                nd = node_data[nb_id]
-                neighbor_texts.append(f"{nd['title']}. {nd['abstract']}")
-                neighbor_hops.append(hop)
-
-        target_text = f"{info['title']}. {info['abstract']}"
-
-        result = build_node_sample(
-            target_node_text=target_text,
-            neighbor_texts=neighbor_texts,
-            neighbor_hops=neighbor_hops,
-            cls_label=info["label"],
-            class_names=class_names,
-            tokenizer=tokenizer,
-            max_seq_len=max_seq_len,
-            mask_target_text=mask_target_text,
-        )
-        samples.append(result)
-
-    dataset = Dataset.from_list(samples)
-    dataset.info.description = f"TM-DLM pubmed ({split}), classes: {class_names}"
-    return dataset
-
-
-def get_class_token_ids(dataset_name: str, tokenizer) -> tuple[list[str], list[int]]:
+def get_class_token_ids(
+    dataset_name: str, tokenizer, max_answer_tokens: int = 1
+) -> tuple[list[str], list]:
     """
-    Get the answer digit token IDs for multiple-choice classification.
+    Get the answer token IDs for multiple-choice classification.
 
-    With the MC format, answers are "0", "1", ..., "K-1" (single digits).
+    When max_answer_tokens=1: returns list[int] of single token IDs.
+    When max_answer_tokens>1: returns list[list[int]] of token ID sequences
+        (each padded to max_answer_tokens with pad_token_id).
 
     Returns:
-        class_names: list of class name strings, ordered by class index
-        answer_token_ids: list of token IDs for "0", "1", ..., "K-1"
+        class_names: list of class name strings
+        answer_token_ids: token IDs per class (format depends on max_answer_tokens)
     """
     config = DATASET_CONFIGS[dataset_name]
+    num_classes = config["num_classes"]
 
-    if dataset_name == "pubmed":
+    if "class_names" in config:
         class_names = config["class_names"]
     else:
         tape_ds = load_dataset(
@@ -499,10 +695,20 @@ def get_class_token_ids(dataset_name: str, tokenizer) -> tuple[list[str], list[i
                 label_to_class[sample["label"]] = sample["class"]
         class_names = [label_to_class[i] for i in range(len(label_to_class))]
 
-    # Answer tokens are digits: "0", "1", ..., "K-1"
-    answer_token_ids = []
-    for i in range(len(class_names)):
-        tokens = tokenizer.encode(str(i), add_special_tokens=False)
-        answer_token_ids.append(tokens[0])
+    answer_labels = get_answer_labels(num_classes)
 
+    if max_answer_tokens == 1:
+        # Single-token mode: only works if all labels are single tokens
+        answer_token_ids = []
+        for label in answer_labels:
+            tokens = tokenizer.encode(label, add_special_tokens=False)
+            answer_token_ids.append(tokens[0])
+        return class_names, answer_token_ids
+
+    # Multi-token: use numeric labels (not class names), padded to max_answer_tokens
+    answer_token_ids = []
+    for label in answer_labels:
+        tokens = tokenizer.encode(label, add_special_tokens=False)[:max_answer_tokens]
+        tokens = tokens + [0] * (max_answer_tokens - len(tokens))
+        answer_token_ids.append(tokens)
     return class_names, answer_token_ids
