@@ -78,6 +78,17 @@ class EvalInfillArgs:
             "choices": ["target_first", "neighbor_first"],
         },
     )
+    prompt_format: str = field(
+        default="mc_digit",
+        metadata={
+            "help": "Prompt format: mc_digit | category_infill",
+            "choices": ["mc_digit", "category_infill"],
+        },
+    )
+    use_chat_template: bool = field(
+        default=False,
+        metadata={"help": "Wrap prompt in LLaDA-Instruct chat template"},
+    )
 
 
 @torch.no_grad()
@@ -86,26 +97,34 @@ def evaluate_with_sampler(
     tokenizer,
     test_dataset,
     num_classes,
+    class_names,
     batch_size=8,
     steps=10,
     temperature=0.0,
     remasking="low_confidence",
+    prompt_format="mc_digit",
 ):
     """
     Evaluate using MDLMSampler.infill() for iterative denoising.
 
     For each batch:
       1. Mask answer positions with mask_token_id
-      2. Call infill() to iteratively denoise
+      2. Call infill() to iteratively denoise (steps passed to sampler)
       3. Read predicted tokens at answer positions
-      4. Decode and match against numeric answer labels ("0", "1", ..., "39")
+      4. Decode and match against:
+         - numeric answer labels ("0", "1", ..., "N-1") for mc_digit
+         - class name strings for category_infill (case-insensitive substring match)
 
     Returns:
         accuracy, per_class_correct, per_class_total, predictions, decoded_answers
     """
     device = next(model.parameters()).device
 
-    answer_labels = get_answer_labels(num_classes)
+    if prompt_format == "mc_digit":
+        answer_labels = get_answer_labels(num_classes)
+    else:
+        # category_infill: match against class names
+        answer_labels = [name.lower().strip() for name in class_names]
 
     # Build sampler
     scheduler = LinearAlphaScheduler()
@@ -160,15 +179,29 @@ def evaluate_with_sampler(
             ans_len = answer_lens[i]
             pred_tokens = denoised[i, pos : pos + ans_len].cpu().tolist()
 
-            # Decode and match against numeric answer labels
+            # Decode and match against answer labels
             decoded = tokenizer.decode(pred_tokens, skip_special_tokens=True).strip()
             all_decoded.append(decoded)
 
             pred_class = -1
-            for k, label in enumerate(answer_labels):
-                if decoded == label:
-                    pred_class = k
-                    break
+            if prompt_format == "mc_digit":
+                for k, label in enumerate(answer_labels):
+                    if decoded == label:
+                        pred_class = k
+                        break
+            else:
+                # category_infill: case-insensitive exact match, fallback to substring
+                decoded_lower = decoded.lower().strip()
+                for k, label in enumerate(answer_labels):
+                    if decoded_lower == label:
+                        pred_class = k
+                        break
+                if pred_class == -1:
+                    # Substring fallback for partial matches like "Neural Network" vs "Neural Networks"
+                    for k, label in enumerate(answer_labels):
+                        if decoded_lower in label or label in decoded_lower:
+                            pred_class = k
+                            break
             all_predictions.append(pred_class)
 
             gt = cls_labels[i]
@@ -219,13 +252,21 @@ def main():
 
     # Get class info
     num_classes = DATASET_CONFIGS[args.dataset_name]["num_classes"]
-    class_names, _ = get_class_token_ids(
-        args.dataset_name, tokenizer, max_answer_tokens=args.max_answer_tokens
+    class_names, class_token_ids = get_class_token_ids(
+        args.dataset_name,
+        tokenizer,
+        max_answer_tokens=args.max_answer_tokens,
+        prompt_format=args.prompt_format,
     )
+    # For category_infill, auto-compute max_answer_tokens from class token lists
+    if args.prompt_format == "category_infill":
+        args.max_answer_tokens = len(class_token_ids[0])
+        logger.info(
+            "category_infill: max_answer_tokens auto-set to %d",
+            args.max_answer_tokens,
+        )
     logger.info("Class names: %s", class_names)
-    logger.info(
-        "Num classes: %d, using numeric labels 0-%d", num_classes, num_classes - 1
-    )
+    logger.info("Prompt format: %s", args.prompt_format)
 
     # Load test dataset
     logger.info("Loading %s %s split...", args.dataset_name, args.split)
@@ -239,6 +280,8 @@ def main():
         seed=args.seed,
         max_answer_tokens=args.max_answer_tokens,
         prompt_layout=args.prompt_layout,
+        use_chat_template=args.use_chat_template,
+        prompt_format=args.prompt_format,
     )
     logger.info("Loaded %d samples", len(test_dataset))
 
@@ -260,10 +303,12 @@ def main():
             tokenizer=tokenizer,
             test_dataset=test_dataset,
             num_classes=num_classes,
+            class_names=class_names,
             batch_size=args.batch_size,
             steps=args.steps,
             temperature=args.temperature,
             remasking=args.remasking,
+            prompt_format=args.prompt_format,
         )
     )
     elapsed = time.time() - t_start
@@ -344,6 +389,8 @@ def main():
             "lora_path": args.lora_path,
             "max_answer_tokens": args.max_answer_tokens,
             "prompt_layout": args.prompt_layout,
+            "prompt_format": args.prompt_format,
+            "use_chat_template": args.use_chat_template,
         },
         "elapsed_seconds": round(elapsed, 1),
     }
