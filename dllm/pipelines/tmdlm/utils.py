@@ -89,10 +89,10 @@ class GraphDataCollator:
             label_indices = []
             for f in features:
                 start = f["label_token_pos"]
-                ans_len = f.get("answer_len", 1)
-                # positions for each answer token, pad with 0 for shorter answers
-                positions = list(range(start, start + ans_len))
-                positions += [0] * (max_ans_len - ans_len)
+                # Always use consecutive positions from start, even for short answers.
+                # The input_ids already has max_answer_tokens positions allocated
+                # (real tokens + pad tokens), so start..start+max_ans_len-1 are valid.
+                positions = list(range(start, start + max_ans_len))
                 label_indices.append(positions)
             batch["label_token_indices"] = torch.tensor(
                 label_indices, dtype=torch.long

@@ -77,6 +77,17 @@ class EvalLogitArgs:
             "choices": ["target_first", "neighbor_first"],
         },
     )
+    use_chat_template: bool = field(
+        default=False,
+        metadata={"help": "Wrap prompt in LLaDA-Instruct chat template"},
+    )
+    prompt_format: str = field(
+        default="mc_digit",
+        metadata={
+            "help": "Prompt format: mc_digit | category_infill",
+            "choices": ["mc_digit", "category_infill"],
+        },
+    )
 
 
 @torch.no_grad()
@@ -143,10 +154,22 @@ def evaluate_layer0(
         label_indices = batch["label_token_indices"]  # [b, max_ans_len]
         b, l = input_ids.shape
 
-        # Mask ALL class-name tokens (positions where labels != -100)
+        # Mask answer tokens: use labels != -100 for single-token mode,
+        # but for multi-token mode, mask ALL answer positions (including padding)
+        # to prevent answer-length leakage.
         masked_input = input_ids.clone()
-        maskable = labels != -100  # [b, l]
-        masked_input[maskable] = tokenizer.mask_token_id
+        if max_answer_tokens == 1:
+            maskable = labels != -100  # [b, l]
+            masked_input[maskable] = tokenizer.mask_token_id
+        else:
+            # Mask all answer positions to prevent the model from seeing
+            # which positions are pad vs real tokens (leaks answer length)
+            maskable = labels != -100
+            masked_input[maskable] = tokenizer.mask_token_id
+            for j in range(label_indices.shape[1]):
+                masked_input[torch.arange(b, device=device), label_indices[:, j]] = (
+                    tokenizer.mask_token_id
+                )
 
         # Build attention mask
         if use_topology_mask and "topology_mask" in batch:
@@ -204,8 +227,9 @@ def evaluate_layer0(
 
             # ans_log_probs: [b, max_ans_len, V] -> for each position, gather the K class tokens
             scores = torch.zeros(b, K, device=device)
-            # Build validity mask: position j is valid if token != 0 (padding)
-            cls_valid = class_token_ids_tensor != 0  # [K, max_ans_len]
+            # Build validity mask: position j is valid if token != pad_token_id
+            pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+            cls_valid = class_token_ids_tensor != pad_id  # [K, max_ans_len]
 
             for j in range(ans_len):
                 pos_logprobs = ans_log_probs[:, j, :]  # [b, V]
@@ -267,8 +291,18 @@ def main():
 
     # Get class token IDs
     class_names, class_first_token_ids = get_class_token_ids(
-        args.dataset_name, tokenizer, max_answer_tokens=args.max_answer_tokens
+        args.dataset_name,
+        tokenizer,
+        max_answer_tokens=args.max_answer_tokens,
+        prompt_format=args.prompt_format,
     )
+
+    # For category_infill, auto-compute max_answer_tokens from returned token IDs
+    if args.prompt_format == "category_infill":
+        # class_first_token_ids is list[list[int]], infer max_answer_tokens
+        args.max_answer_tokens = len(class_first_token_ids[0])
+        logger.info("category_infill: max_answer_tokens=%d", args.max_answer_tokens)
+
     logger.info("Class names: %s", class_names)
     logger.info("Class token IDs: %s", class_first_token_ids)
 
@@ -300,6 +334,8 @@ def main():
         seed=args.seed,
         max_answer_tokens=args.max_answer_tokens,
         prompt_layout=args.prompt_layout,
+        use_chat_template=args.use_chat_template,
+        prompt_format=args.prompt_format,
     )
     logger.info("Loaded %d samples", len(test_dataset))
 
@@ -379,6 +415,8 @@ def main():
             "use_topology_mask": args.use_topology_mask,
             "lora_path": args.lora_path,
             "prompt_layout": args.prompt_layout,
+            "use_chat_template": args.use_chat_template,
+            "prompt_format": args.prompt_format,
         },
         "elapsed_seconds": round(elapsed, 1),
     }
