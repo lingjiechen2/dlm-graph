@@ -180,6 +180,348 @@ def get_answer_labels(num_classes: int) -> list[str]:
     return [str(i) for i in range(num_classes)]
 
 
+def _build_node_sample_chat(
+    target_node_text: str,
+    neighbor_texts: list[str],
+    neighbor_hops: list[int],
+    cls_label: int,
+    class_names: list[str],
+    tokenizer,
+    max_seq_len: int,
+    mask_target_text: bool,
+    options_str: str,
+    answer_tokens: list[int],
+    max_answer_tokens: int,
+    prompt_layout: str,
+) -> dict:
+    """
+    Build a sample wrapped in LLaDA-Instruct chat template.
+
+    Format:
+        <|startoftext|><|start_header_id|>user<|end_header_id|>
+
+        {user_content}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+        {answer_tokens}
+
+    The user_content follows the same layout as the raw prompt
+    (target_first or neighbor_first), but wrapped in the chat template.
+    Answer tokens are placed in the assistant turn.
+    """
+
+    def _tok(text: str) -> list[int]:
+        return tokenizer.encode(text, add_special_tokens=False)
+
+    # --- Compute chat template overhead ---
+    # Tokenize an empty chat template to measure its token count
+    empty_template_ids = tokenizer.apply_chat_template(
+        [{"role": "user", "content": ""}],
+        tokenize=True,
+        add_generation_prompt=True,
+    )
+    template_overhead = len(empty_template_ids)
+    # Budget for content tokens inside the user turn
+    content_budget = max_seq_len - template_overhead - len(answer_tokens)
+
+    # --- Build target text portion ---
+    target_prefix_str = "Paper: "
+    options_suffix_str = f"\nOptions: {options_str}\nAnswer:"
+
+    target_prefix_toks = _tok(target_prefix_str)
+    target_body_toks = _tok(target_node_text)
+    options_suffix_toks = _tok(options_suffix_str)
+
+    fixed_target_overhead = len(target_prefix_toks) + len(options_suffix_toks)
+    target_body_budget = max(content_budget // 2 - fixed_target_overhead, 50)
+    target_body_toks = target_body_toks[:target_body_budget]
+
+    target_content_toks = target_prefix_toks + target_body_toks + options_suffix_toks
+    target_content_len = len(target_content_toks)
+
+    # --- Build neighbor text portions ---
+    num_neighbors = len(neighbor_texts)
+    nb_remaining = content_budget - target_content_len
+    per_nb_budget = (
+        max(nb_remaining // max(num_neighbors, 1), 20) if num_neighbors > 0 else 0
+    )
+
+    nb_token_list = []
+    for i, (nb_text, hop) in enumerate(zip(neighbor_texts, neighbor_hops)):
+        nb_prefix = _tok(f"\nNeighbor {i + 1}: ")
+        nb_body = _tok(nb_text)
+        nb_ids = (nb_prefix + nb_body)[:per_nb_budget]
+        nb_token_list.append((nb_ids, hop))
+
+    # --- Assemble content tokens (inside user turn) based on layout ---
+    if prompt_layout == "neighbor_first":
+        content_toks = []
+        nb_content_spans = []  # spans relative to content_toks start
+        nb_hops = []
+        max_nb_total = content_budget - target_content_len
+
+        for nb_ids, hop in nb_token_list:
+            if len(content_toks) + len(nb_ids) > max_nb_total:
+                break
+            start = len(content_toks)
+            content_toks.extend(nb_ids)
+            nb_content_spans.append([start, len(content_toks)])
+            nb_hops.append(hop)
+
+        target_content_start = len(content_toks)
+        content_toks.extend(target_content_toks)
+        target_content_span = [target_content_start, len(content_toks)]
+    else:
+        # target_first (default)
+        content_toks = list(target_content_toks)
+        target_content_span = [0, target_content_len]
+        nb_content_spans = []
+        nb_hops = []
+
+        for nb_ids, hop in nb_token_list:
+            if len(content_toks) >= content_budget:
+                break
+            start = len(content_toks)
+            content_toks.extend(nb_ids)
+            nb_content_spans.append([start, len(content_toks)])
+            nb_hops.append(hop)
+
+    # --- Now wrap content in chat template ---
+    # Decode content tokens back to text, then apply chat template
+    content_text = tokenizer.decode(content_toks, skip_special_tokens=False)
+    template_ids = tokenizer.apply_chat_template(
+        [{"role": "user", "content": content_text}],
+        tokenize=True,
+        add_generation_prompt=True,
+    )
+
+    # Find where content tokens start within the template
+    # Template structure: [BOS, start_header, "user", end_header, \n, \n, ...content..., eot, start_header, "assistant", end_header, \n, \n]
+    # We need to locate the content tokens within template_ids
+    # The user content starts after the first \n\n (positions 4,5 in the template)
+    # and ends before <|eot_id|>
+
+    # Find content offset by matching: after "user" header there are two \n tokens
+    # Template prefix: BOS + start_header + "user" + end_header + \n + \n
+    empty_prefix_ids = tokenizer.apply_chat_template(
+        [{"role": "user", "content": ""}],
+        tokenize=True,
+        add_generation_prompt=True,
+    )
+    # Find where content would be inserted (between prefix \n\n and eot_id)
+    # In empty template, the eot_id comes right after the \n\n of user header
+    eot_id = tokenizer.encode("<|eot_id|>", add_special_tokens=False)[0]
+    # Content offset = index of eot_id in empty template (content goes before it)
+    content_offset = empty_prefix_ids.index(eot_id)
+
+    # Append answer tokens after the template (assistant header end)
+    input_ids = list(template_ids) + answer_tokens
+    label_token_pos = len(template_ids)  # answer starts right after template
+
+    # --- Compute node_spans in final input_ids coordinates ---
+    # Shift content spans by content_offset
+    target_span = [
+        target_content_span[0] + content_offset,
+        target_content_span[1] + content_offset,
+    ]
+    # Include the answer tokens in the target span
+    target_span_with_answer = [target_span[0], len(input_ids)]
+
+    node_spans = [target_span_with_answer]
+    node_hops_out = [0]
+
+    for span, hop in zip(nb_content_spans, nb_hops):
+        node_spans.append([span[0] + content_offset, span[1] + content_offset])
+        node_hops_out.append(hop)
+
+    # Enforce max_seq_len
+    input_ids = input_ids[:max_seq_len]
+
+    # --- Labels: -100 everywhere except answer positions ---
+    labels = [-100] * len(input_ids)
+    if mask_target_text:
+        # Target body starts at: content_offset + len(target_prefix_toks)
+        # (in neighbor_first: offset by target_content_start)
+        if prompt_layout == "neighbor_first":
+            tb_start = content_offset + target_content_start + len(target_prefix_toks)
+            tb_end = (
+                content_offset
+                + target_content_start
+                + len(target_prefix_toks)
+                + len(target_body_toks)
+            )
+        else:
+            tb_start = content_offset + len(target_prefix_toks)
+            tb_end = content_offset + len(target_prefix_toks) + len(target_body_toks)
+        for pos in range(tb_start, min(tb_end, len(labels))):
+            labels[pos] = input_ids[pos]
+
+    # Always include answer tokens in labels
+    for j in range(len(answer_tokens)):
+        pos = label_token_pos + j
+        if pos < len(labels):
+            labels[pos] = input_ids[pos]
+
+    return {
+        "input_ids": input_ids,
+        "labels": labels,
+        "node_spans": node_spans,
+        "node_hops": node_hops_out,
+        "cls_label": cls_label,
+        "label_token_pos": label_token_pos,
+        "answer_len": len(answer_tokens),
+    }
+
+
+def _build_node_sample_category(
+    target_node_text: str,
+    neighbor_texts: list[str],
+    neighbor_hops: list[int],
+    cls_label: int,
+    class_names: list[str],
+    tokenizer,
+    max_seq_len: int,
+    mask_target_text: bool,
+    max_answer_tokens: int,
+    prompt_layout: str,
+) -> dict:
+    """
+    Build a sample using natural category infill format.
+
+    Format:
+        Paper: <target_text>
+        Options: 0) Case Based 1) Genetic Algorithms ...
+        The category of this paper is: <class_name>
+
+    The class name tokens are the answer (masked during eval).
+    All class names are padded to max_answer_tokens with pad_token_id.
+    """
+
+    def _tok(text: str) -> list[int]:
+        return tokenizer.encode(text, add_special_tokens=False)
+
+    # --- Build answer tokens (class name, padded to max_answer_tokens) ---
+    class_name = class_names[cls_label]
+    answer_tokens = _tok(class_name)[:max_answer_tokens]
+    # Pad to max_answer_tokens
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+    answer_len = len(answer_tokens)
+    while len(answer_tokens) < max_answer_tokens:
+        answer_tokens.append(pad_id)
+
+    # --- Tokenize target section ---
+    target_prefix = _tok("Paper: ")
+    target_body = _tok(target_node_text)
+    # Build options string (same as mc_digit but without digit prefix)
+    options_str = " ".join(f"{i}) {name}" for i, name in enumerate(class_names))
+    options_suffix = _tok(f"\nOptions: {options_str}")
+    category_suffix = _tok("\nThe category of this paper is: ")
+
+    # Reserve space: target gets up to half of max_seq_len
+    overhead = (
+        len(target_prefix)
+        + len(options_suffix)
+        + len(category_suffix)
+        + len(answer_tokens)
+    )
+    target_body_budget = max(max_seq_len // 2 - overhead, 50)
+    target_body = target_body[:target_body_budget]
+
+    # Target section as a unit (includes options + suffix + answer)
+    target_section = (
+        target_prefix + target_body + options_suffix + category_suffix + answer_tokens
+    )
+    target_section_len = len(target_section)
+    answer_offset_in_target = (
+        len(target_prefix)
+        + len(target_body)
+        + len(options_suffix)
+        + len(category_suffix)
+    )
+
+    # --- Tokenize neighbor sections ---
+    num_neighbors = len(neighbor_texts)
+    remaining_budget = max_seq_len - target_section_len
+    per_nb_budget = (
+        max(remaining_budget // max(num_neighbors, 1), 20) if num_neighbors > 0 else 0
+    )
+
+    nb_token_list = []
+    for i, (nb_text, hop) in enumerate(zip(neighbor_texts, neighbor_hops)):
+        nb_prefix = _tok(f"\nNeighbor {i + 1}: ")
+        nb_body = _tok(nb_text)
+        nb_ids = (nb_prefix + nb_body)[:per_nb_budget]
+        nb_token_list.append((nb_ids, hop))
+
+    # --- Assemble based on layout ---
+    # For category_infill, answer is always at the end of target section.
+    # target_first: [target+answer] [nb1] [nb2] ...
+    # neighbor_first: [nb1] [nb2] ... [target+answer]
+    if prompt_layout == "neighbor_first":
+        input_ids = []
+        nb_spans = []
+        nb_hops = []
+        max_nb_total = max_seq_len - target_section_len
+
+        for nb_ids, hop in nb_token_list:
+            if len(input_ids) + len(nb_ids) > max_nb_total:
+                break
+            start = len(input_ids)
+            input_ids.extend(nb_ids)
+            nb_spans.append([start, len(input_ids)])
+            nb_hops.append(hop)
+
+        target_start = len(input_ids)
+        label_token_pos = target_start + answer_offset_in_target
+        input_ids.extend(target_section)
+
+        node_spans = [[target_start, len(input_ids)]] + nb_spans
+        node_hops_out = [0] + nb_hops
+    else:
+        # target_first (default)
+        input_ids = list(target_section)
+        label_token_pos = answer_offset_in_target
+        node_spans = [[0, target_section_len]]
+        node_hops_out = [0]
+
+        for nb_ids, hop in nb_token_list:
+            if len(input_ids) >= max_seq_len:
+                break
+            start = len(input_ids)
+            input_ids.extend(nb_ids)
+            node_spans.append([start, len(input_ids)])
+            node_hops_out.append(hop)
+
+    # Enforce max_seq_len
+    input_ids = input_ids[:max_seq_len]
+
+    # --- Labels: -100 everywhere except answer positions ---
+    labels = [-100] * len(input_ids)
+    if mask_target_text:
+        if prompt_layout == "neighbor_first":
+            tb_start = target_start + len(target_prefix)
+            tb_end = target_start + len(target_prefix) + len(target_body)
+        else:
+            tb_start = len(target_prefix)
+            tb_end = len(target_prefix) + len(target_body)
+        for pos in range(tb_start, min(tb_end, len(labels))):
+            labels[pos] = input_ids[pos]
+    # Answer tokens in labels (only real tokens, not padding)
+    for j in range(answer_len):
+        pos = label_token_pos + j
+        if pos < len(labels):
+            labels[pos] = input_ids[pos]
+
+    return {
+        "input_ids": input_ids,
+        "labels": labels,
+        "node_spans": node_spans,
+        "node_hops": node_hops_out,
+        "cls_label": cls_label,
+        "label_token_pos": label_token_pos,
+        "answer_len": answer_len,
+    }
+
+
 def build_node_sample(
     target_node_text: str,
     neighbor_texts: list[str],
@@ -192,28 +534,46 @@ def build_node_sample(
     answer_labels: Optional[list[str]] = None,
     max_answer_tokens: int = 1,
     prompt_layout: str = "target_first",
+    use_chat_template: bool = False,
+    prompt_format: str = "mc_digit",
 ) -> dict:
     """
     Build a single TM-DLM training sample for one target node.
 
-    Uses a multiple-choice format. Layout controlled by ``prompt_layout``:
+    ``prompt_format`` controls the overall format:
 
-    target_first (default):
+    mc_digit (default):
+        Multiple-choice with digit answers.
         Paper: <target_text>
         Options: 0) Case Based ... 6) Theory
-        Answer: <answer>
-        Neighbor 1: <nb1_text>
-        ...
+        Answer: <answer_digit>
 
-    neighbor_first:
-        Neighbor 1: <nb1_text>
-        ...
+    category_infill:
+        Natural language category infill with options list.
         Paper: <target_text>
-        Options: 0) Case Based ... 6) Theory
-        Answer: <answer>
+        Options: 0) Case Based 1) Genetic Algorithms ...
+        The category of this paper is: <class_name>
+
+    ``prompt_layout`` controls ordering (target_first vs neighbor_first).
 
     Labels are -100 everywhere EXCEPT at the answer token positions.
     """
+
+    if prompt_format == "category_infill":
+        return _build_node_sample_category(
+            target_node_text=target_node_text,
+            neighbor_texts=neighbor_texts,
+            neighbor_hops=neighbor_hops,
+            cls_label=cls_label,
+            class_names=class_names,
+            tokenizer=tokenizer,
+            max_seq_len=max_seq_len,
+            mask_target_text=mask_target_text,
+            max_answer_tokens=max_answer_tokens,
+            prompt_layout=prompt_layout,
+        )
+
+    # --- mc_digit format (original) ---
 
     def _tok(text: str) -> list[int]:
         return tokenizer.encode(text, add_special_tokens=False)
@@ -228,6 +588,22 @@ def build_node_sample(
     # --- Build answer tokens ---
     answer_str = answer_labels[cls_label]
     answer_tokens = _tok(answer_str)[:max_answer_tokens]
+
+    if use_chat_template:
+        return _build_node_sample_chat(
+            target_node_text=target_node_text,
+            neighbor_texts=neighbor_texts,
+            neighbor_hops=neighbor_hops,
+            cls_label=cls_label,
+            class_names=class_names,
+            tokenizer=tokenizer,
+            max_seq_len=max_seq_len,
+            mask_target_text=mask_target_text,
+            options_str=options_str,
+            answer_tokens=answer_tokens,
+            max_answer_tokens=max_answer_tokens,
+            prompt_layout=prompt_layout,
+        )
 
     # --- Tokenize target section ---
     target_prefix = _tok("Paper: ")
@@ -342,6 +718,8 @@ def _build_tag_samples(
     mask_target_text: bool,
     max_answer_tokens: int,
     prompt_layout: str,
+    use_chat_template: bool = False,
+    prompt_format: str = "mc_digit",
 ) -> list[dict]:
     """Build TM-DLM samples for a list of node IDs (shared across all datasets)."""
     answer_labels = get_answer_labels(len(class_names))
@@ -379,6 +757,8 @@ def _build_tag_samples(
             answer_labels=answer_labels,
             max_answer_tokens=max_answer_tokens,
             prompt_layout=prompt_layout,
+            use_chat_template=use_chat_template,
+            prompt_format=prompt_format,
         )
         samples.append(result)
 
@@ -628,6 +1008,8 @@ def load_tag_dataset(
     mask_target_text: bool = False,
     max_answer_tokens: int = 1,
     prompt_layout: str = "target_first",
+    use_chat_template: bool = False,
+    prompt_format: str = "mc_digit",
 ) -> Dataset:
     """
     Load a TAG dataset and return a HuggingFace Dataset of TM-DLM samples.
@@ -656,6 +1038,8 @@ def load_tag_dataset(
         mask_target_text,
         max_answer_tokens,
         prompt_layout,
+        use_chat_template,
+        prompt_format,
     )
 
     dataset = Dataset.from_list(samples)
@@ -666,18 +1050,26 @@ def load_tag_dataset(
 
 
 def get_class_token_ids(
-    dataset_name: str, tokenizer, max_answer_tokens: int = 1
+    dataset_name: str,
+    tokenizer,
+    max_answer_tokens: int = 1,
+    prompt_format: str = "mc_digit",
 ) -> tuple[list[str], list]:
     """
-    Get the answer token IDs for multiple-choice classification.
+    Get the answer token IDs for classification.
 
-    When max_answer_tokens=1: returns list[int] of single token IDs.
-    When max_answer_tokens>1: returns list[list[int]] of token ID sequences
-        (each padded to max_answer_tokens with pad_token_id).
+    prompt_format="mc_digit":
+        Uses numeric labels ("0", "1", ...).
+        max_answer_tokens=1: returns list[int] of single token IDs.
+        max_answer_tokens>1: returns list[list[int]] padded to max_answer_tokens.
+
+    prompt_format="category_infill":
+        Uses class name tokens directly.
+        Always returns list[list[int]] padded to max_answer_tokens.
 
     Returns:
         class_names: list of class name strings
-        answer_token_ids: token IDs per class (format depends on max_answer_tokens)
+        answer_token_ids: token IDs per class
     """
     config = DATASET_CONFIGS[dataset_name]
     num_classes = config["num_classes"]
@@ -695,17 +1087,30 @@ def get_class_token_ids(
                 label_to_class[sample["label"]] = sample["class"]
         class_names = [label_to_class[i] for i in range(len(label_to_class))]
 
+    if prompt_format == "category_infill":
+        # Auto-compute max_answer_tokens from actual class name lengths
+        pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+        all_tokens = [
+            tokenizer.encode(name, add_special_tokens=False) for name in class_names
+        ]
+        max_answer_tokens = max(len(t) for t in all_tokens)
+        answer_token_ids = []
+        for tokens in all_tokens:
+            tokens = tokens[:max_answer_tokens]
+            tokens = tokens + [pad_id] * (max_answer_tokens - len(tokens))
+            answer_token_ids.append(tokens)
+        return class_names, answer_token_ids
+
+    # --- mc_digit format ---
     answer_labels = get_answer_labels(num_classes)
 
     if max_answer_tokens == 1:
-        # Single-token mode: only works if all labels are single tokens
         answer_token_ids = []
         for label in answer_labels:
             tokens = tokenizer.encode(label, add_special_tokens=False)
             answer_token_ids.append(tokens[0])
         return class_names, answer_token_ids
 
-    # Multi-token: use numeric labels (not class names), padded to max_answer_tokens
     answer_token_ids = []
     for label in answer_labels:
         tokens = tokenizer.encode(label, add_special_tokens=False)[:max_answer_tokens]
