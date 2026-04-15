@@ -393,20 +393,22 @@ def _build_node_sample_category(
         The category of this paper is: <class_name>
 
     The class name tokens are the answer (masked during eval).
-    All class names are padded to max_answer_tokens with pad_token_id.
+    Short class names are padded to max_answer_tokens with eos_token_id so the
+    model learns an explicit "answer ends here" boundary; all answer positions
+    (real tokens + eos fill) are supervised and participate in diffusion noise.
     """
 
     def _tok(text: str) -> list[int]:
         return tokenizer.encode(text, add_special_tokens=False)
 
-    # --- Build answer tokens (class name, padded to max_answer_tokens) ---
+    # --- Build answer tokens (class name, eos-padded to max_answer_tokens) ---
     class_name = class_names[cls_label]
     answer_tokens = _tok(class_name)[:max_answer_tokens]
-    # Pad to max_answer_tokens
-    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+    eos_id = tokenizer.eos_token_id
+    assert eos_id is not None, "tokenizer must have eos_token_id for answer padding"
     answer_len = len(answer_tokens)
     while len(answer_tokens) < max_answer_tokens:
-        answer_tokens.append(pad_id)
+        answer_tokens.append(eos_id)
 
     # --- Tokenize target section ---
     target_prefix = _tok("Paper: ")
@@ -505,8 +507,10 @@ def _build_node_sample_category(
             tb_end = len(target_prefix) + len(target_body)
         for pos in range(tb_start, min(tb_end, len(labels))):
             labels[pos] = input_ids[pos]
-    # Answer tokens in labels (only real tokens, not padding)
-    for j in range(answer_len):
+    # Answer tokens in labels: supervise the full max_answer_tokens span,
+    # including eos-fill positions, so the model learns to terminate short
+    # class names with eos rather than relying on an externally-known length.
+    for j in range(max_answer_tokens):
         pos = label_token_pos + j
         if pos < len(labels):
             labels[pos] = input_ids[pos]
