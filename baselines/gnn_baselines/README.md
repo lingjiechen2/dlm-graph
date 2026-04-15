@@ -13,12 +13,15 @@ Not copied:
 - any other generated or cached files
 
 ## Supported Models
-
+我们的改进比较偏transformer设计，所以增加了一下graph transformer的代表性架构的对比。
 - `gcn`
 - `sage`
 - `gat`
 - `gatv2`
-
+- `graphtransformer`
+- `nodeformer`
+- `difformer`
+- `sgformer`
 
 ## Example Commands
 
