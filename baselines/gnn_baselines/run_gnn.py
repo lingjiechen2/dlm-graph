@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-在 Cora / PubMed 上做 PyG GCN、GraphSAGE、GAT、GATv2 节点分类。
+在 Cora / PubMed 上做 PyG GCN、GraphSAGE、GAT、GATv2 以及若干 GT baseline 节点分类。
 
 默认从 LLaGA 仓库的 dataset 目录加载 processed_data.pt（与 LLaGA 预处理一致）。
 可选 --source planetoid 使用 PyG 官方 Planetoid 数据。
@@ -10,6 +10,10 @@
   python run_gnn.py --dataset pubmed --model sage --epochs 200
   python run_gnn.py --dataset cora --model gat --heads 8 --hidden_dim 8
   python run_gnn.py --dataset cora --model gatv2 --heads 8 --hidden_dim 8
+  python run_gnn.py --dataset cora --model graphtransformer --hidden_dim 96 --heads 2 --lr 5e-4
+  python run_gnn.py --dataset cora --model difformer --hidden_dim 96 --heads 1 --num_layers 3 --lr 5e-4
+  python run_gnn.py --dataset cora --model sgformer --hidden_dim 96 --heads 1 --num_layers 2 --lr 5e-4
+  python run_gnn.py --dataset cora --model nodeformer --hidden_dim 96 --heads 1 --num_layers 3 --lr 5e-4
   python run_gnn.py --source planetoid --dataset cora --data_root ./data
   python run_gnn.py --dataset cora --model gcn --gpu 1
   python run_gnn.py --dataset pubmed --model gcn --batch_size 1024 --neighbor_fanout 25
@@ -38,7 +42,50 @@ from torch_geometric.data import Data
 from torch_geometric.datasets import Planetoid
 from torch_geometric.loader import NeighborLoader
 
-from model import build_model
+from model import GTConfig, build_model
+
+GT_MODELS = {"graphtransformer", "difformer", "sgformer", "nodeformer"}
+
+
+def str2bool(value: str | bool | None) -> bool | None:
+    if value is None or isinstance(value, bool):
+        return value
+    lowered = value.lower()
+    if lowered in {"true", "1", "yes", "y"}:
+        return True
+    if lowered in {"false", "0", "no", "n"}:
+        return False
+    raise argparse.ArgumentTypeError(f"invalid boolean value: {value}")
+
+
+def build_gt_config(args: argparse.Namespace) -> GTConfig:
+    return GTConfig(
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers,
+        n_heads=args.heads,
+        dropout=args.dropout,
+        layer_norm=bool(args.gt_layer_norm),
+        batch_norm=bool(args.gt_batch_norm),
+        use_weight=bool(args.gt_use_weight),
+        use_graph=bool(args.gt_use_graph),
+        graph_weight=args.gt_graph_weight,
+        use_residual=bool(args.gt_use_residual),
+        use_source=bool(args.gt_use_source),
+        use_act=bool(args.gt_use_act),
+        alpha=args.gt_alpha,
+        kernel=args.gt_kernel,
+        aggregate=args.gt_aggregate,
+        kernel_trans=args.gt_kernel_trans,
+        projection_matrix_type=args.gt_projection_matrix_type,
+        nb_random_features=args.gt_nb_random_features,
+        use_gumbel=bool(args.gt_use_gumbel),
+        nb_gumbel_sample=args.gt_nb_gumbel_sample,
+        rb_order=args.gt_rb_order,
+        rb_trans=args.gt_rb_trans,
+        use_edge_loss=bool(args.gt_use_edge_loss),
+        edge_loss_weight=args.gt_edge_loss_weight,
+        tau=args.gt_tau,
+    )
 
 
 @dataclass
@@ -244,7 +291,10 @@ def save_run_results(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="PyG node classification (GCN / GraphSAGE / GAT / GATv2)"
+        description=(
+            "PyG node classification "
+            "(GCN / GraphSAGE / GAT / GATv2 / GraphTransformer / DIFFormer / SGFormer / NodeFormer)"
+        )
     )
     p.add_argument(
         "--source",
@@ -261,7 +311,12 @@ def parse_args() -> argparse.Namespace:
         help="LLaGA 的 dataset 目录；默认为本仓库 LLaGA/dataset",
     )
     p.add_argument("--data_root", type=str, default="./data", help="仅 planetoid：数据下载目录")
-    p.add_argument("--model", type=str, default="gcn", help="gcn | sage | gat | gatv2")
+    p.add_argument(
+        "--model",
+        type=str,
+        default="gcn",
+        help="gcn | sage | gat | gatv2 | graphtransformer | difformer | sgformer | nodeformer",
+    )
     p.add_argument(
         "--hidden_dim",
         type=int,
@@ -307,6 +362,27 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="结果保存目录，默认为本目录下的 result/",
     )
+    p.add_argument("--gt_use_graph", type=str2bool, default=True, help="GT 模型是否融合图结构分支")
+    p.add_argument("--gt_graph_weight", type=float, default=0.8, help="GT 图分支权重")
+    p.add_argument("--gt_use_weight", type=str2bool, default=True, help="GT 注意力是否学习 value 投影")
+    p.add_argument("--gt_use_residual", type=str2bool, default=True, help="GT 模型是否启用残差")
+    p.add_argument("--gt_use_source", type=str2bool, default=True, help="DIFFormer 是否融合初始特征")
+    p.add_argument("--gt_use_act", type=str2bool, default=True, help="GT 模型层后是否加激活")
+    p.add_argument("--gt_aggregate", type=str, default="add", help="SGFormer 聚合方式: add | cat")
+    p.add_argument("--gt_kernel", type=str, default="simple", help="DIFFormer kernel: simple | sigmoid")
+    p.add_argument("--gt_kernel_trans", type=str, default="softmax", help="NodeFormer kernel_trans: softmax | relu")
+    p.add_argument("--gt_use_gumbel", type=str2bool, default=True, help="NodeFormer 训练时是否使用 Gumbel")
+    p.add_argument("--gt_nb_gumbel_sample", type=int, default=10, help="NodeFormer Gumbel 采样数")
+    p.add_argument("--gt_nb_random_features", type=int, default=30, help="NodeFormer 随机特征数")
+    p.add_argument("--gt_rb_order", type=int, default=2, help="NodeFormer relational bias 阶数")
+    p.add_argument("--gt_rb_trans", type=str, default="sigmoid", help="NodeFormer relational bias 变换")
+    p.add_argument("--gt_use_edge_loss", type=str2bool, default=True, help="NodeFormer 是否启用 edge loss")
+    p.add_argument("--gt_edge_loss_weight", type=float, default=0.1, help="NodeFormer edge loss 权重")
+    p.add_argument("--gt_projection_matrix_type", type=str, default="a", help="NodeFormer 投影矩阵类型；none 表示关闭")
+    p.add_argument("--gt_alpha", type=float, default=0.5, help="DIFFormer residual alpha")
+    p.add_argument("--gt_layer_norm", type=str2bool, default=False, help="GT 模型是否用 layer norm")
+    p.add_argument("--gt_batch_norm", type=str2bool, default=False, help="GT 模型是否用 batch norm")
+    p.add_argument("--gt_tau", type=float, default=0.25, help="NodeFormer / kernelized attention 温度")
     p.add_argument("--no_save", action="store_true", help="不保存 metrics 与 checkpoint")
     return p.parse_args()
 
@@ -329,7 +405,17 @@ def run_gnn(args: argparse.Namespace | None = None) -> float:
     else:
         info = load_planetoid(args.dataset, args.data_root)
 
+    if args.gt_projection_matrix_type is not None and str(args.gt_projection_matrix_type).lower() == "none":
+        args.gt_projection_matrix_type = None
+
     use_mini_batch_requested = args.batch_size > 0
+    model_name = args.model.lower()
+    if model_name in GT_MODELS and use_mini_batch_requested:
+        print(
+            f"警告: {args.model} 当前按 OpenGT 风格仅支持全图训练；"
+            "已忽略 --batch_size，改用全图训练。"
+        )
+        use_mini_batch_requested = False
     need_cpu_copy = use_mini_batch_requested and _neighbor_sampling_backend_available()
     if need_cpu_copy:
         # Data.to() 会原地修改对象；NeighborLoader 用 CPU 图，须在 to(device) 前 clone
@@ -338,6 +424,7 @@ def run_gnn(args: argparse.Namespace | None = None) -> float:
         data_cpu = None
     data = info.data.to(device)
 
+    gt_config = build_gt_config(args) if model_name in GT_MODELS else None
     model = build_model(
         name=args.model,
         in_dim=info.num_node_features,
@@ -346,6 +433,7 @@ def run_gnn(args: argparse.Namespace | None = None) -> float:
         num_layers=args.num_layers,
         dropout=args.dropout,
         heads=args.heads,
+        gt_config=gt_config,
     ).to(device)
 
     optimizer = torch.optim.Adam(
@@ -396,6 +484,9 @@ def run_gnn(args: argparse.Namespace | None = None) -> float:
                 out = model(batch.x, batch.edge_index)
                 bs = batch.batch_size
                 loss = F.cross_entropy(out[:bs], batch.y[:bs])
+                aux_loss = getattr(model, "last_aux_loss", None)
+                if aux_loss is not None:
+                    loss = loss + aux_loss
                 loss.backward()
                 optimizer.step()
                 total_loss += loss.item() * bs
@@ -405,6 +496,9 @@ def run_gnn(args: argparse.Namespace | None = None) -> float:
             optimizer.zero_grad()
             logits = model(data.x, data.edge_index)
             loss = F.cross_entropy(logits[data.train_mask], data.y[data.train_mask])
+            aux_loss = getattr(model, "last_aux_loss", None)
+            if aux_loss is not None:
+                loss = loss + aux_loss
             loss.backward()
             optimizer.step()
             loss_item = loss.item()

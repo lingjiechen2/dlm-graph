@@ -1,4 +1,4 @@
-"""PyG node classification (GCN, GraphSAGE, GAT, GATv2) under LLaGA."""
+"""PyG node classification baselines including GNN and GT variants."""
 
 from .model import build_model
 
