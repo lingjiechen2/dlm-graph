@@ -1,8 +1,10 @@
 """
 Logit-based evaluation: single forward pass + restricted argmax / log-prob scoring.
 
-Masks answer positions, runs one (or few) forward passes, then scores each
-candidate class by its logit at the answer position(s). No iterative denoising.
+Masks answer positions, runs a SINGLE forward pass, then scores each
+candidate class by its logit at the answer position(s). No iterative denoising
+— for multi-step natural generation, use eval_infill.py instead, which passes
+the step count directly into MDLMSampler.
 
 Usage
 -----
@@ -47,10 +49,6 @@ class EvalLogitArgs:
     max_seq_len: int = field(default=2048)
     max_neighbors_per_hop: int = field(default=10)
     max_hops: int = field(default=2)
-    denoising_steps: int = field(
-        default=1,
-        metadata={"help": "Number of denoising steps (1 = single forward pass)"},
-    )
     use_topology_mask: bool = field(
         default=False, metadata={"help": "Apply topology mask to attention"}
     )
@@ -98,12 +96,11 @@ def evaluate_layer0(
     class_first_token_ids,
     batch_size=8,
     use_topology_mask=False,
-    denoising_steps=1,
     position_id_type="sequential",
     max_answer_tokens=1,
 ):
     """
-    Layer 0 evaluation: frozen model, mask answer tokens, forward pass,
+    Layer 0 evaluation: frozen model, mask answer tokens, single forward pass,
     classify by restricted argmax (single-token) or log-prob sum (multi-token).
 
     Returns:
@@ -181,21 +178,13 @@ def evaluate_layer0(
             # Standard padding-only mask (full attention among valid tokens)
             attn_mask = batch.get("attention_mask", None)  # [b, l]
 
-        # Iterative denoising
+        # Single forward pass
         pos_ids = batch.get("position_ids", None)
-        x = masked_input
-        for step in range(denoising_steps):
-            forward_kwargs = dict(input_ids=x, attention_mask=attn_mask)
-            if pos_ids is not None:
-                forward_kwargs["position_ids"] = pos_ids
-            outputs = model(**forward_kwargs)
-            logits = outputs.logits  # [b, l, V]
-
-            if step < denoising_steps - 1:
-                # Intermediate step: unmask with argmax predictions at masked positions
-                pred_tokens = logits.argmax(dim=-1)  # [b, l]
-                still_masked = x == tokenizer.mask_token_id
-                x = torch.where(still_masked, pred_tokens, x)
+        forward_kwargs = dict(input_ids=masked_input, attention_mask=attn_mask)
+        if pos_ids is not None:
+            forward_kwargs["position_ids"] = pos_ids
+        outputs = model(**forward_kwargs)
+        logits = outputs.logits  # [b, l, V]
 
         if max_answer_tokens == 1:
             # Single-token: restricted argmax over class token IDs
@@ -361,7 +350,6 @@ def main():
         class_first_token_ids=class_first_token_ids,
         batch_size=args.batch_size,
         use_topology_mask=args.use_topology_mask,
-        denoising_steps=args.denoising_steps,
         position_id_type=args.position_id_type,
         max_answer_tokens=args.max_answer_tokens,
     )
@@ -411,7 +399,6 @@ def main():
             "max_seq_len": args.max_seq_len,
             "max_neighbors_per_hop": args.max_neighbors_per_hop,
             "max_hops": args.max_hops,
-            "denoising_steps": args.denoising_steps,
             "use_topology_mask": args.use_topology_mask,
             "lora_path": args.lora_path,
             "prompt_layout": args.prompt_layout,

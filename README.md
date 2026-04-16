@@ -108,6 +108,27 @@ Baselines from arXiv:2502.00829, Table 2.
 
 See [examples/tmdlm/results.md](examples/tmdlm/results.md) for full results.
 
+### Neighbor Count Sweep (`nb` = 1/3/5/10/20)
+
+Open-ended category-infill runs logged in `experiments/experiment_log.jsonl`
+(`openended_*_nb*`, `target_first`, `use_topology_mask=False`).
+Metric shown is `accuracy_strict` (%).
+
+| Dataset | Hops | nb=1 | nb=3 | nb=5 | nb=10 | nb=20 |
+|---------|------|------|------|------|-------|-------|
+| Cora | 1 | 60.52 | 60.33 | 61.62 | 61.44 | 61.44 |
+| Cora | 2 | 57.93 | 63.84 | 65.13 | 64.21 | 64.76 |
+| Cora | 3 | 57.93 | 63.84 | 65.13 | 64.21 | 64.76 |
+| OGBN-Arxiv | 1 | 55.10 | 58.10 | 58.90 | 59.20 | 58.90 |
+| OGBN-Arxiv | 2 | 56.30 | 59.10 | 61.10 | 58.70 | 57.60 |
+| OGBN-Arxiv | 3 | 56.30 | 59.10 | 61.10 | 58.70 | 57.60 |
+| OGBN-Products | 1 | 62.50 | 63.20 | 64.70 | 64.50 | 64.20 |
+| OGBN-Products | 2 | 62.70 | 64.30 | 64.80 | 65.10 | 66.30 |
+| OGBN-Products | 3 | 62.70 | 64.30 | 64.80 | 65.10 | 66.30 |
+| PubMed | 1 | 74.77 | 80.98 | 81.68 | 81.78 | 82.08 |
+| PubMed | 2 | 85.19 | 88.89 | 88.99 | 88.89 | 90.29 |
+| PubMed | 3 | 85.19 | 88.89 | 88.99 | 88.89 | 90.29 |
+
 ## Project Structure
 
 ```
