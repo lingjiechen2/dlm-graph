@@ -180,6 +180,25 @@ def get_answer_labels(num_classes: int) -> list[str]:
     return [str(i) for i in range(num_classes)]
 
 
+def _neighbor_prefix_str(
+    idx: int,
+    neighbor_labels: Optional[list[int]],
+    class_names: list[str],
+    include_neighbor_labels: bool,
+) -> str:
+    """Build the '\\nNeighbor <i> [<class>]: ' / '\\nNeighbor <i>: ' prefix."""
+    if (
+        include_neighbor_labels
+        and neighbor_labels is not None
+        and idx < len(neighbor_labels)
+        and neighbor_labels[idx] is not None
+    ):
+        lbl = neighbor_labels[idx]
+        if 0 <= lbl < len(class_names):
+            return f"\nNeighbor {idx + 1} [{class_names[lbl]}]: "
+    return f"\nNeighbor {idx + 1}: "
+
+
 def _build_node_sample_chat(
     target_node_text: str,
     neighbor_texts: list[str],
@@ -193,6 +212,8 @@ def _build_node_sample_chat(
     answer_tokens: list[int],
     max_answer_tokens: int,
     prompt_layout: str,
+    neighbor_labels: Optional[list[int]] = None,
+    include_neighbor_labels: bool = False,
 ) -> dict:
     """
     Build a sample wrapped in LLaDA-Instruct chat template.
@@ -247,7 +268,9 @@ def _build_node_sample_chat(
 
     nb_token_list = []
     for i, (nb_text, hop) in enumerate(zip(neighbor_texts, neighbor_hops)):
-        nb_prefix = _tok(f"\nNeighbor {i + 1}: ")
+        nb_prefix = _tok(
+            _neighbor_prefix_str(i, neighbor_labels, class_names, include_neighbor_labels)
+        )
         nb_body = _tok(nb_text)
         nb_ids = (nb_prefix + nb_body)[:per_nb_budget]
         nb_token_list.append((nb_ids, hop))
@@ -383,6 +406,8 @@ def _build_node_sample_category(
     mask_target_text: bool,
     max_answer_tokens: int,
     prompt_layout: str,
+    neighbor_labels: Optional[list[int]] = None,
+    include_neighbor_labels: bool = False,
 ) -> dict:
     """
     Build a sample using natural category infill format.
@@ -449,7 +474,9 @@ def _build_node_sample_category(
 
     nb_token_list = []
     for i, (nb_text, hop) in enumerate(zip(neighbor_texts, neighbor_hops)):
-        nb_prefix = _tok(f"\nNeighbor {i + 1}: ")
+        nb_prefix = _tok(
+            _neighbor_prefix_str(i, neighbor_labels, class_names, include_neighbor_labels)
+        )
         nb_body = _tok(nb_text)
         nb_ids = (nb_prefix + nb_body)[:per_nb_budget]
         nb_token_list.append((nb_ids, hop))
@@ -540,6 +567,8 @@ def build_node_sample(
     prompt_layout: str = "target_first",
     use_chat_template: bool = False,
     prompt_format: str = "mc_digit",
+    neighbor_labels: Optional[list[int]] = None,
+    include_neighbor_labels: bool = False,
 ) -> dict:
     """
     Build a single TM-DLM training sample for one target node.
@@ -575,6 +604,8 @@ def build_node_sample(
             mask_target_text=mask_target_text,
             max_answer_tokens=max_answer_tokens,
             prompt_layout=prompt_layout,
+            neighbor_labels=neighbor_labels,
+            include_neighbor_labels=include_neighbor_labels,
         )
 
     # --- mc_digit format (original) ---
@@ -607,6 +638,8 @@ def build_node_sample(
             answer_tokens=answer_tokens,
             max_answer_tokens=max_answer_tokens,
             prompt_layout=prompt_layout,
+            neighbor_labels=neighbor_labels,
+            include_neighbor_labels=include_neighbor_labels,
         )
 
     # --- Tokenize target section ---
@@ -635,7 +668,9 @@ def build_node_sample(
 
     nb_token_list = []
     for i, (nb_text, hop) in enumerate(zip(neighbor_texts, neighbor_hops)):
-        nb_prefix = _tok(f"\nNeighbor {i + 1}: ")
+        nb_prefix = _tok(
+            _neighbor_prefix_str(i, neighbor_labels, class_names, include_neighbor_labels)
+        )
         nb_body = _tok(nb_text)
         nb_ids = (nb_prefix + nb_body)[:per_nb_budget]
         nb_token_list.append((nb_ids, hop))
@@ -724,6 +759,7 @@ def _build_tag_samples(
     prompt_layout: str,
     use_chat_template: bool = False,
     prompt_format: str = "mc_digit",
+    include_neighbor_labels: bool = False,
 ) -> list[dict]:
     """Build TM-DLM samples for a list of node IDs (shared across all datasets)."""
     answer_labels = get_answer_labels(len(class_names))
@@ -741,11 +777,13 @@ def _build_tag_samples(
 
         neighbor_texts = []
         neighbor_hops = []
+        neighbor_labels = []
         for nb_id, hop in zip(nb_ids, nb_hops):
             if nb_id in node_data:
                 nd = node_data[nb_id]
                 neighbor_texts.append(f"{nd['title']}. {nd['abstract']}")
                 neighbor_hops.append(hop)
+                neighbor_labels.append(nd.get("label"))
 
         target_text = f"{info['title']}. {info['abstract']}"
 
@@ -763,6 +801,8 @@ def _build_tag_samples(
             prompt_layout=prompt_layout,
             use_chat_template=use_chat_template,
             prompt_format=prompt_format,
+            neighbor_labels=neighbor_labels,
+            include_neighbor_labels=include_neighbor_labels,
         )
         samples.append(result)
 
@@ -1014,6 +1054,7 @@ def load_tag_dataset(
     prompt_layout: str = "target_first",
     use_chat_template: bool = False,
     prompt_format: str = "mc_digit",
+    include_neighbor_labels: bool = False,
 ) -> Dataset:
     """
     Load a TAG dataset and return a HuggingFace Dataset of TM-DLM samples.
@@ -1044,6 +1085,7 @@ def load_tag_dataset(
         prompt_layout,
         use_chat_template,
         prompt_format,
+        include_neighbor_labels=include_neighbor_labels,
     )
 
     dataset = Dataset.from_list(samples)

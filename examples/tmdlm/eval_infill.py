@@ -89,6 +89,16 @@ class EvalInfillArgs:
         default=False,
         metadata={"help": "Wrap prompt in LLaDA-Instruct chat template"},
     )
+    include_neighbor_labels: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "If True, prefix each neighbor with its ground-truth class name, "
+                "e.g. 'Neighbor 1 [Neural Networks]: ...'. Oracle feature for "
+                "test-time ablation — train does not see this."
+            )
+        },
+    )
 
 
 @torch.no_grad()
@@ -282,6 +292,7 @@ def main():
         prompt_layout=args.prompt_layout,
         use_chat_template=args.use_chat_template,
         prompt_format=args.prompt_format,
+        include_neighbor_labels=args.include_neighbor_labels,
     )
     logger.info("Loaded %d samples", len(test_dataset))
 
@@ -391,6 +402,7 @@ def main():
             "prompt_layout": args.prompt_layout,
             "prompt_format": args.prompt_format,
             "use_chat_template": args.use_chat_template,
+            "include_neighbor_labels": args.include_neighbor_labels,
         },
         "elapsed_seconds": round(elapsed, 1),
     }

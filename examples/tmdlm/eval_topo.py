@@ -67,6 +67,16 @@ class EvalArguments(dllm.utils.ModelArguments):
             "choices": ["target_first", "neighbor_first"],
         },
     )
+    include_neighbor_labels: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "If True, prefix each neighbor with its ground-truth class name, "
+                "e.g. 'Neighbor 1 [Neural Networks]: ...'. Oracle feature for "
+                "test-time ablation — train does not see this."
+            )
+        },
+    )
 
 
 def evaluate():
@@ -88,6 +98,7 @@ def evaluate():
         max_neighbors_per_hop=args.max_neighbors_per_hop,
         max_hops=args.max_hops,
         prompt_layout=args.prompt_layout,
+        include_neighbor_labels=args.include_neighbor_labels,
     )
 
     collator = GraphDataCollator(tokenizer=tokenizer, padding=True, return_tensors="pt")
