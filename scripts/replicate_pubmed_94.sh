@@ -22,7 +22,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48g
 #SBATCH --gpu-bind=verbose,closest
-#SBATCH --time=00:30:00
+#SBATCH --time=01:00:00
 #SBATCH --output=.logs/%x-%j.out
 #SBATCH --error=.logs/%x-%j.err
 
@@ -43,7 +43,7 @@ python examples/tmdlm/eval_logit.py \
   --model_name_or_path "$MODEL" \
   --dataset_name pubmed \
   --split test \
-  --batch_size 4 \
+  --batch_size 1 \
   --max_seq_len 4096 \
   --max_neighbors_per_hop 10 \
   --max_hops 1 \
