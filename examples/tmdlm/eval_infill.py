@@ -17,6 +17,7 @@ Usage
 
 import json
 import os
+import re
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -37,6 +38,64 @@ from dllm.data.graph import (
 )
 
 logger = dllm.utils.get_default_logger(__name__)
+
+
+_DIGIT_PREFIX_RE = re.compile(r"^(?:option\s*)?\d+\s*[):.\-]\s*")
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _normalize_pred(s: str) -> str:
+    """Lowercase, strip leading 'N) ' / 'option N:' digit-prefixes and quotes."""
+    s = s.lower().strip()
+    s = _DIGIT_PREFIX_RE.sub("", s)
+    return s.strip(" '\"\t")
+
+
+def match_class(decoded: str, answer_labels: list) -> int:
+    """
+    Match decoded string to class index.
+
+    Tries (in order):
+      1. exact match after prefix/case normalization
+      2. a label is contained in decoded (longest label wins on ties)
+      3. decoded is contained in a label (only if unambiguous)
+      4. distinguishing-token overlap (unique winner required)
+    Returns -1 if no confident match.
+    """
+    dec = _normalize_pred(decoded)
+    if not dec:
+        return -1
+    # 1. exact
+    for k, lbl in enumerate(answer_labels):
+        if dec == lbl:
+            return k
+    # 2. label is substring of decoded (most specific wins)
+    hits = [k for k, lbl in enumerate(answer_labels) if lbl and lbl in dec]
+    if hits:
+        hits.sort(key=lambda k: -len(answer_labels[k]))
+        return hits[0]
+    # 3. decoded is substring of label (only if unique)
+    hits = [k for k, lbl in enumerate(answer_labels) if dec in lbl]
+    if len(hits) == 1:
+        return hits[0]
+    # 4. distinguishing-token overlap
+    dec_toks = set(_TOKEN_RE.findall(dec))
+    if not dec_toks:
+        return -1
+    all_label_toks = [set(_TOKEN_RE.findall(lbl)) for lbl in answer_labels]
+    scores = []
+    for k, lbl_toks in enumerate(all_label_toks):
+        shared_across = set().union(
+            *(t for j, t in enumerate(all_label_toks) if j != k)
+        )
+        distinguishing = lbl_toks - shared_across
+        d_match = len(dec_toks & distinguishing)
+        scores.append((d_match, len(dec_toks & lbl_toks), k))
+    scores.sort(reverse=True)
+    # require at least one distinguishing-token match, with a strict lead
+    if scores[0][0] >= 1 and (len(scores) == 1 or scores[0][0] > scores[1][0]):
+        return scores[0][2]
+    return -1
 
 
 @dataclass
@@ -96,6 +155,16 @@ class EvalInfillArgs:
                 "If True, prefix each neighbor with its ground-truth class name, "
                 "e.g. 'Neighbor 1 [Neural Networks]: ...'. Oracle feature for "
                 "test-time ablation — train does not see this."
+            )
+        },
+    )
+    include_options: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "If True (default), include 'Options: 0) ... 1) ...' list in the "
+                "category_infill prompt. Set False for pure open-ended generation "
+                "(the 'openended' setting in the README sweep)."
             )
         },
     )
@@ -200,18 +269,7 @@ def evaluate_with_sampler(
                         pred_class = k
                         break
             else:
-                # category_infill: case-insensitive exact match, fallback to substring
-                decoded_lower = decoded.lower().strip()
-                for k, label in enumerate(answer_labels):
-                    if decoded_lower == label:
-                        pred_class = k
-                        break
-                if pred_class == -1:
-                    # Substring fallback for partial matches like "Neural Network" vs "Neural Networks"
-                    for k, label in enumerate(answer_labels):
-                        if decoded_lower in label or label in decoded_lower:
-                            pred_class = k
-                            break
+                pred_class = match_class(decoded, answer_labels)
             all_predictions.append(pred_class)
 
             gt = cls_labels[i]
@@ -293,6 +351,7 @@ def main():
         use_chat_template=args.use_chat_template,
         prompt_format=args.prompt_format,
         include_neighbor_labels=args.include_neighbor_labels,
+        include_options=args.include_options,
     )
     logger.info("Loaded %d samples", len(test_dataset))
 
@@ -403,6 +462,7 @@ def main():
             "prompt_format": args.prompt_format,
             "use_chat_template": args.use_chat_template,
             "include_neighbor_labels": args.include_neighbor_labels,
+            "include_options": args.include_options,
         },
         "elapsed_seconds": round(elapsed, 1),
     }

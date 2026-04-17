@@ -96,6 +96,17 @@ class EvalLogitArgs:
             )
         },
     )
+    neighbor_label_format: str = field(
+        default="bracket",
+        metadata={
+            "help": (
+                "When include_neighbor_labels=True, controls the phrasing: "
+                "bracket='Neighbor 1 [Class]: ', paren='Neighbor 1 (category: Class): ', "
+                "sentence='Neighbor 1 is a Class paper: ', colon='Neighbor 1 — Class: '."
+            ),
+            "choices": ["bracket", "paren", "sentence", "colon"],
+        },
+    )
 
 
 @torch.no_grad()
@@ -336,6 +347,7 @@ def main():
         use_chat_template=args.use_chat_template,
         prompt_format=args.prompt_format,
         include_neighbor_labels=args.include_neighbor_labels,
+        neighbor_label_format=args.neighbor_label_format,
     )
     logger.info("Loaded %d samples", len(test_dataset))
 
@@ -416,6 +428,7 @@ def main():
             "use_chat_template": args.use_chat_template,
             "prompt_format": args.prompt_format,
             "include_neighbor_labels": args.include_neighbor_labels,
+            "neighbor_label_format": args.neighbor_label_format,
         },
         "elapsed_seconds": round(elapsed, 1),
     }
