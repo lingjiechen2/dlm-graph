@@ -93,7 +93,10 @@ Baselines from arXiv:2502.00829, Table 2.
 | LLaGA | LLM + Graph Projector | 87.55% |
 | GraphSAGE | GNN | 87.44% |
 | GCN | GNN | 87.41% |
-| **Ours: SFT (ep3)** | **DLM + LoRA** | **84.13%** |
+| **Ours: SFT (1-hop + topo mask)** | **DLM + LoRA (best: checkpoint-408)** | **84.87%** |
+| Ours: SFT (1-hop, no topo mask) | DLM + LoRA (best: checkpoint-816) | 84.13% |
+| Ours: SFT (2-hop + topo mask) | DLM + LoRA (best: checkpoint-510) | 83.95% |
+| Ours: SFT (2-hop, no topo mask) | DLM + LoRA (best: checkpoint-510) | 84.50% |
 | RoBERTa-355M | LM only | 83.17% |
 | Ours: Frozen MC | DLM zero-shot | 62.73% |
 
@@ -128,6 +131,23 @@ Metric shown is `accuracy_strict` (%).
 | PubMed | 1 | 74.77 | 80.98 | 81.68 | 81.78 | 82.08 |
 | PubMed | 2 | 85.19 | 88.89 | 88.99 | 88.89 | 90.29 |
 | PubMed | 3 | 85.19 | 88.89 | 88.99 | 88.89 | 90.29 |
+
+### Neighbor Count Sweep (`nb` = 1/3/5/10/20, `use_topology_mask=True`)
+
+Open-ended category-infill runs from
+`.logs/topo_nb_sweep_debug_direct/records/*.jsonl` (run id: `debug_direct`).
+Metric shown is `accuracy_strict` (%).
+
+| Dataset | Hops | nb=1 | nb=3 | nb=5 | nb=10 | nb=20 |
+|---------|------|------|------|------|-------|-------|
+| Cora | 1 | 60.89 | 59.41 | 60.52 | 60.33 | 60.33 |
+| Cora | 2 | 57.01 | 61.44 | 62.55 | 62.55 | 62.73 |
+| Cora | 3 | 57.01 | 61.44 | 62.55 | 62.55 | 62.73 |
+| PubMed | 1 | 74.97 | 76.78 | 77.58 | 77.88 | 77.98 |
+| PubMed | 2 | 77.08 | 81.88 | 82.78 | 82.28 | 82.68 |
+| PubMed | 3 | 77.08 | 81.88 | 82.78 | 82.28 | 82.68 |
+
+`OGBN-Arxiv` and `OGBN-Products` topology-mask sweep rows are still running and will be appended after completion.
 
 ## Project Structure
 
