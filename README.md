@@ -76,7 +76,7 @@ CUDA_VISIBLE_DEVICES=0 python examples/tmdlm/sft.py \
     --dataset_name cora --max_hops 0 \
     --per_device_train_batch_size 2 --gradient_accumulation_steps 8 \
     --learning_rate 5e-5 --num_train_epochs 5 \
-    --output_dir .models/tmdlm-llada-8b-cora-target-only \
+    --output_dir .models/tmdlm-llada-8b-cora-na-na-target-ckpt \
     --gradient_checkpointing True --cls_loss_weight 0.0
 ```
 

@@ -35,6 +35,7 @@ class GraphDataCollator:
     return_tensors: str = "pt"
     label_pad_token_id: int = -100
     position_id_type: str = "sequential"  # "sequential" (default) or "topological"
+    use_topology_mask: bool = True  # False → fall back to dense padding-only attention
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
         b = len(features)
@@ -53,15 +54,17 @@ class GraphDataCollator:
             labels[i, :seq_len] = torch.tensor(f["labels"], dtype=torch.long)
             attention_mask[i, :seq_len] = 1
 
-        # --- Build topology masks ---
-        topology_mask = self._build_topology_mask(features, max_len, hop_limit=None)
-
         batch = {
             "input_ids": input_ids,
             "labels": labels,
             "attention_mask": attention_mask,
-            "topology_mask": topology_mask,
         }
+
+        # --- Build topology masks (skip when disabled to use dense attention) ---
+        if self.use_topology_mask:
+            batch["topology_mask"] = self._build_topology_mask(
+                features, max_len, hop_limit=None
+            )
 
         # --- Build topological position IDs (optional) ---
         if self.position_id_type == "topological":

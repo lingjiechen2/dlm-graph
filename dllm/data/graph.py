@@ -50,6 +50,61 @@ DATASET_CONFIGS = {
         "val_size": 500,
         "test_size": 1000,
     },
+    "ogbn-products": {
+        "tape_dir": HF_CACHE_ROOT / "xxhe___tape-products",
+        "num_classes": 47,
+        # From labelidx2productcategory.csv.gz (OGB). Empty/sentinel rows
+        # replaced with placeholders so tokenization stays unambiguous.
+        "class_names": [
+            "Home & Kitchen",  # 0
+            "Health & Personal Care",  # 1
+            "Beauty",  # 2
+            "Sports & Outdoors",  # 3
+            "Books",  # 4
+            "Patio, Lawn & Garden",  # 5
+            "Toys & Games",  # 6
+            "CDs & Vinyl",  # 7
+            "Cell Phones & Accessories",  # 8
+            "Grocery & Gourmet Food",  # 9
+            "Arts, Crafts & Sewing",  # 10
+            "Clothing, Shoes & Jewelry",  # 11
+            "Electronics",  # 12
+            "Movies & TV",  # 13
+            "Software",  # 14
+            "Video Games",  # 15
+            "Automotive",  # 16
+            "Pet Supplies",  # 17
+            "Office Products",  # 18
+            "Industrial & Scientific",  # 19
+            "Musical Instruments",  # 20
+            "Tools & Home Improvement",  # 21
+            "Magazine Subscriptions",  # 22
+            "Baby Products",  # 23
+            "Category 24",  # 24 (empty in OGB mapping)
+            "Appliances",  # 25
+            "Kitchen & Dining",  # 26
+            "Collectibles & Fine Art",  # 27
+            "All Beauty",  # 28
+            "Luxury Beauty",  # 29
+            "Amazon Fashion",  # 30
+            "Computers",  # 31
+            "All Electronics",  # 32
+            "Purchase Circles",  # 33
+            "MP3 Players & Accessories",  # 34
+            "Gift Cards",  # 35
+            "Office & School Supplies",  # 36
+            "Home Improvement",  # 37
+            "Camera & Photo",  # 38
+            "GPS & Navigation",  # 39
+            "Digital Music",  # 40
+            "Car Electronics",  # 41
+            "Baby",  # 42
+            "Kindle Store",  # 43
+            "Buy a Kindle",  # 44
+            "Furniture & Decor",  # 45
+            "Category 46",  # 46 ("#508510" sentinel in OGB mapping)
+        ],
+    },
     "ogbn-arxiv": {
         "ogb_root": HF_CACHE_ROOT / "ogb___ogbn-arxiv" / "ogbn_arxiv",
         "num_classes": 40,
@@ -1089,10 +1144,103 @@ def _load_ogbn_arxiv_data(
 # Public API
 # ---------------------------------------------------------------------------
 
+def _load_ogbn_products_data(
+    config: dict,
+    split: str,
+    seed: int,
+) -> tuple[dict, dict, list[str], list[int]]:
+    """Load ogbn-products TAPE subset from xxhe/tape-products.
+
+    Subset has 54025 nodes, pre-computed split (train/val/test) and the raw
+    title+content text from Amazon. Labels are global indices over 47 OGB
+    product categories (only 42 are present in the subset).
+    """
+    import csv as _csv
+    import sys as _sys
+    import types as _types
+
+    # Stub torch_sparse so torch.load() can unpickle SparseTensor without the
+    # (broken) native extension. We only read _row / _col from storage.
+    if "torch_sparse" not in _sys.modules:
+        ts_mod = _types.ModuleType("torch_sparse")
+        ts_mod.__path__ = []
+        storage_mod = _types.ModuleType("torch_sparse.storage")
+        tensor_mod = _types.ModuleType("torch_sparse.tensor")
+
+        class _StubStorage:
+            def __setstate__(self, s):
+                if isinstance(s, dict):
+                    for k, v in s.items():
+                        setattr(self, k, v)
+
+        class _StubSparseTensor:
+            def __setstate__(self, s):
+                if isinstance(s, dict):
+                    for k, v in s.items():
+                        setattr(self, k, v)
+
+        storage_mod.SparseStorage = _StubStorage
+        tensor_mod.SparseTensor = _StubSparseTensor
+        ts_mod.SparseTensor = _StubSparseTensor
+        ts_mod.SparseStorage = _StubStorage
+        _sys.modules["torch_sparse"] = ts_mod
+        _sys.modules["torch_sparse.storage"] = storage_mod
+        _sys.modules["torch_sparse.tensor"] = tensor_mod
+
+    tape_dir = Path(config["tape_dir"])
+    pt_file = tape_dir / "ogbn-products_subset.pt"
+    csv_file = tape_dir / "ogbn-products_subset.csv"
+
+    class_names = config["class_names"]
+
+    # 2. Load pt (graph + labels + splits)
+    data = torch.load(pt_file, map_location="cpu", weights_only=False)
+    y = data.y.squeeze(-1).tolist()
+    train_mask = data.train_mask.tolist()
+    val_mask = data.val_mask.tolist()
+    test_mask = data.test_mask.tolist()
+
+    storage = data.adj_t.storage
+    src = storage._row.tolist()
+    dst = storage._col.tolist()
+    edge_index = np.stack([np.array(src), np.array(dst)], axis=0)
+    adj = _build_adjacency(edge_index)
+
+    # 3. Load text from CSV. Rows are in subset-local order (verified: CSV.uid
+    # column matches pt n_asin[i]), so use enumerate instead of nid.
+    texts: list[dict] = []
+    with open(csv_file) as f:
+        reader = _csv.DictReader(f)
+        for row in reader:
+            texts.append(
+                {
+                    "title": (row.get("title") or "").strip(),
+                    "abstract": (row.get("content") or "").strip(),
+                }
+            )
+    assert len(texts) == len(y), f"CSV rows {len(texts)} != labels {len(y)}"
+
+    # 4. Build node_data
+    node_data: dict[int, dict] = {}
+    for i in range(len(y)):
+        node_data[i] = {
+            "title": texts[i]["title"],
+            "abstract": texts[i]["abstract"],
+            "label": int(y[i]),
+        }
+
+    # 5. Split
+    mask = {"train": train_mask, "val": val_mask, "test": test_mask}[split]
+    split_ids = [i for i, m in enumerate(mask) if m]
+
+    return node_data, adj, class_names, split_ids
+
+
 _DATA_LOADERS = {
     "cora": _load_cora_data,
     "pubmed": _load_pubmed_data,
     "ogbn-arxiv": _load_ogbn_arxiv_data,
+    "ogbn-products": _load_ogbn_products_data,
 }
 
 

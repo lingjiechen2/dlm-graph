@@ -69,6 +69,24 @@ class DataArguments:
             "help": "Position ID scheme: 'sequential' (default [0..L-1]) or 'topological' (per-node reset)"
         },
     )
+    prompt_format: str = field(
+        default="mc_digit",
+        metadata={
+            "help": "Prompt format: 'mc_digit' (digit answer) or 'category_infill' (class-name infill with eos padding)"
+        },
+    )
+    max_answer_tokens: int = field(
+        default=1,
+        metadata={
+            "help": "Answer token budget. Use 1 for mc_digit; 4-6 for category_infill (short class names + eos fill)"
+        },
+    )
+    use_topology_mask: bool = field(
+        default=True,
+        metadata={
+            "help": "Apply star-topology attention mask restricting neighbor-target attention"
+        },
+    )
 
 
 @dataclass
@@ -100,23 +118,20 @@ def train():
 
     # --- Dataset ---
     with accelerate.PartialState().local_main_process_first():
-        train_dataset = load_tag_dataset(
-            data_args.dataset_name,
+        _common_kwargs = dict(
             tokenizer=tokenizer,
-            split="train",
             max_seq_len=data_args.max_seq_len,
             max_neighbors_per_hop=data_args.max_neighbors_per_hop,
             max_hops=data_args.max_hops,
             mask_target_text=data_args.mask_target_text,
+            prompt_format=data_args.prompt_format,
+            max_answer_tokens=data_args.max_answer_tokens,
+        )
+        train_dataset = load_tag_dataset(
+            data_args.dataset_name, split="train", **_common_kwargs
         )
         val_dataset = load_tag_dataset(
-            data_args.dataset_name,
-            tokenizer=tokenizer,
-            split="val",
-            max_seq_len=data_args.max_seq_len,
-            max_neighbors_per_hop=data_args.max_neighbors_per_hop,
-            max_hops=data_args.max_hops,
-            mask_target_text=data_args.mask_target_text,
+            data_args.dataset_name, split="val", **_common_kwargs
         )
 
     # --- Trainer ---
@@ -133,6 +148,7 @@ def train():
             padding=True,
             return_tensors="pt",
             position_id_type=data_args.position_id_type,
+            use_topology_mask=data_args.use_topology_mask,
         ),
     )
     trainer.train()

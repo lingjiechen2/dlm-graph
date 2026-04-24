@@ -109,7 +109,7 @@ CUDA_VISIBLE_DEVICES=0 python examples/tmdlm/run_experiments.py \
 CUDA_VISIBLE_DEVICES=0 python examples/tmdlm/run_experiments.py \
     --exp sft_ep3_eval \
     --model_name_or_path GSAI-ML/LLaDA-8B-Instruct \
-    --lora_path .models/tmdlm-llada-8b-cora-target-only/checkpoint-306 \
+    --lora_path .models/tmdlm-llada-8b-cora-na-na-target-ckpt/checkpoint-306 \
     --dataset_name cora \
     --max_hops 0
 ```
@@ -136,7 +136,7 @@ CUDA_VISIBLE_DEVICES=0 python examples/tmdlm/sft.py \
     --gradient_accumulation_steps 8 \
     --learning_rate 5e-5 \
     --num_train_epochs 5 \
-    --output_dir .models/tmdlm-llada-8b-cora-target-only \
+    --output_dir .models/tmdlm-llada-8b-cora-na-na-target-ckpt \
     --gradient_checkpointing True \
     --cls_loss_weight 0.0
 ```
