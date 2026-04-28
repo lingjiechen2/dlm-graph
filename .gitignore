@@ -137,6 +137,8 @@ dmypy.json
 /wandb/
 /.logs/
 /.models/
+/.datasets/
+/summaries/
 
 # Experiment logs (local results, not tracked)
 /experiments/
