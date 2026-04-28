@@ -24,6 +24,7 @@ set -euo pipefail
 REPO_ROOT="/home/lingjie7/auto-research/projects/dlm-graph"
 SFT_SCRIPT="${REPO_ROOT}/examples/tmdlm/sft.py"
 PYTHON_BIN="${PYTHON_BIN:-/home/lingjie7/anaconda3/envs/dllm/bin/python}"
+export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
 if [[ -n "${ZSH_VERSION:-}" && -f "${HOME}/.zshrc" ]]; then
   source "${HOME}/.zshrc" || true
@@ -54,7 +55,7 @@ DATASET_NAME="${DATASET_NAME:-pubmed}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_ROOT}/.models}"
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
 
-NUM_EPOCHS="${NUM_EPOCHS:-20}"
+NUM_EPOCHS="${NUM_EPOCHS:-10}"
 LEARNING_RATE="${LEARNING_RATE:-5e-5}"
 PER_DEVICE_TRAIN_BATCH_SIZE="${PER_DEVICE_TRAIN_BATCH_SIZE:-2}"
 PER_DEVICE_EVAL_BATCH_SIZE="${PER_DEVICE_EVAL_BATCH_SIZE:-4}"
@@ -68,7 +69,9 @@ MAX_ANSWER_TOKENS="${MAX_ANSWER_TOKENS:-1}"
 INCLUDE_NEIGHBOR_LABELS="${INCLUDE_NEIGHBOR_LABELS:-True}"
 NEIGHBOR_LABEL_FORMAT="${NEIGHBOR_LABEL_FORMAT:-bracket}"
 GRADIENT_CHECKPOINTING="${GRADIENT_CHECKPOINTING:-True}"
-CLS_LOSS_WEIGHT="${CLS_LOSS_WEIGHT:-1.0}"
+CLS_LOSS_WEIGHT="${CLS_LOSS_WEIGHT:-0.0}"
+SAVE_STEPS="${SAVE_STEPS:-0.05}"
+EVAL_STEPS="${EVAL_STEPS:-0.1}"
 REPORT_TO="${REPORT_TO:-wandb}"
 
 LORA_R="${LORA_R:-64}"
@@ -127,8 +130,11 @@ for i in "${!EXPERIMENTS[@]}"; do
     --gradient_accumulation_steps "${GRAD_ACCUM_STEPS}"
     --gradient_checkpointing "${GRADIENT_CHECKPOINTING}"
     --cls_loss_weight "${CLS_LOSS_WEIGHT}"
+    --save_steps "${SAVE_STEPS}"
+    --eval_steps "${EVAL_STEPS}"
     --report_to "${REPORT_TO}"
     --run_name "${run_name}"
+    --overwrite_output_dir
     --lora True
     --r "${LORA_R}"
     --lora_alpha "${LORA_ALPHA}"

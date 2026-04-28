@@ -248,7 +248,8 @@ def evaluate_layer0(
     per_class_total = {i: 0 for i in range(num_classes)}
     all_predictions = []
 
-    for batch in tqdm(dataloader, desc="Evaluating"):
+    pbar = tqdm(dataloader, desc="Evaluating")
+    for batch in pbar:
         batch = {
             k: v.to(device) if isinstance(v, torch.Tensor) else v
             for k, v in batch.items()
@@ -362,6 +363,9 @@ def evaluate_layer0(
                 correct += 1
                 per_class_correct[gt] += 1
             total += 1
+
+        running_acc = 100.0 * correct / total if total > 0 else 0.0
+        pbar.set_postfix(acc=f"{running_acc:.2f}%", n=total)
 
     accuracy = 100.0 * correct / total if total > 0 else 0.0
     return accuracy, per_class_correct, per_class_total, all_predictions
