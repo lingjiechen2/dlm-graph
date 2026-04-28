@@ -34,7 +34,9 @@ set -euo pipefail
 #   DRY_RUN=1
 
 REPO_ROOT="/home/lingjie7/auto-research/projects/dlm-graph"
-EVAL_SCRIPT="${REPO_ROOT}/examples/tmdlm/eval_logit.py"
+EVAL_SCRIPT="${REPO_ROOT}/examples/tmdlm/eval_infill.py"
+EVAL_KIND="${EVAL_KIND:-infill}"
+INFILL_STEPS="${INFILL_STEPS:-10}"
 PYTHON_BIN="${PYTHON_BIN:-/home/lingjie7/anaconda3/envs/dllm/bin/python}"
 
 if command -v conda >/dev/null 2>&1; then
@@ -133,8 +135,8 @@ for i in "${!SETTINGS[@]}"; do
   read -r hops topo_name topo_bool <<< "${SETTINGS[$i]}"
   gpu_id="${EVAL_GPU_LIST[$i]}"
   run_dir="$(find -L "${RUNS_ROOT}" -maxdepth 1 -type d -name "tmdlm-llada-8b-${DATASET_NAME}-${hops}hop-${topo_name}-catinfill-nbmask-noeospad-r*-ep*-${RUN_TAG}" | head -n 1)"
-  worker_log="${WORK_LOG_ROOT}/eval-${DATASET_NAME}-${hops}hop-${topo_name}-${RUN_TAG}.worker.log"
-  worker_jsonl="${JSONL_ROOT}/eval-${DATASET_NAME}-${hops}hop-${topo_name}-${RUN_TAG}.jsonl"
+  worker_log="${WORK_LOG_ROOT}/eval-${DATASET_NAME}-${hops}hop-${topo_name}-${RUN_TAG}-${EVAL_KIND}.worker.log"
+  worker_jsonl="${JSONL_ROOT}/eval-${DATASET_NAME}-${hops}hop-${topo_name}-${RUN_TAG}-${EVAL_KIND}.jsonl"
 
   if [[ -z "${run_dir}" || ! -d "${run_dir}" ]]; then
     msg="Run directory not found for dataset=${DATASET_NAME}, hops=${hops}, topo=${topo_name}, tag=${RUN_TAG}"
@@ -165,7 +167,7 @@ for i in "${!SETTINGS[@]}"; do
     for ckpt_path in "${ckpts[@]}"; do
       ckpt_name="$(basename "${ckpt_path}")"
       step="${ckpt_name#checkpoint-}"
-      exp_name="eval-${DATASET_NAME}-${hops}hop-${topo_name}-lora-${RUN_TAG}-${ckpt_name}"
+      exp_name="eval-${DATASET_NAME}-${hops}hop-${topo_name}-lora-${RUN_TAG}-${EVAL_KIND}-${ckpt_name}"
 
       cmd=(
         "${PYTHON_BIN}" "${EVAL_SCRIPT}"
@@ -176,13 +178,13 @@ for i in "${!SETTINGS[@]}"; do
         --split "${SPLIT}"
         --max_hops "${hops}"
         --use_topology_mask "${topo_bool}"
-        --position_id_type "${POSITION_ID_TYPE}"
         --prompt_format "${PROMPT_FORMAT}"
         --max_answer_tokens "${MAX_ANSWER_TOKENS}"
         --include_neighbor_labels "${INCLUDE_NEIGHBOR_LABELS}"
         --neighbor_label_format "${NEIGHBOR_LABEL_FORMAT}"
         --max_neighbors_per_hop "${MAX_NEIGHBORS_PER_HOP}"
         --batch_size "${BATCH_SIZE}"
+        --steps "${INFILL_STEPS}"
         --log_file "${worker_jsonl}"
       )
 
