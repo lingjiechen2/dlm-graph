@@ -145,3 +145,4 @@ dmypy.json
 
 # Claude Code
 /.claude/
+analysis/figures/
