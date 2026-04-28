@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run 4 Cora SFT jobs with LoRA:
-# 1-hop + topo, 1-hop + no-topo, 2-hop + topo, 2-hop + no-topo.
+# Run TM-DLM SFT jobs with the latest category-infill recipe:
+# - fixed 2-hop neighborhood
+# - topo-mask True / False
+# - answer window max_answer_tokens=6 (no eos-supervised padding)
+# - include neighbor labels in prompt + supervision
 #
 # Usage:
 #   bash /home/lingjie7/auto-research/projects/dlm-graph/examples/tmdlm/run_sft_cora_hops_topo_lora.sh
 #
 # Optional env vars:
-#   GPUS=0,1,2,3
-#   NUM_EPOCHS=5
+#   DATASETS=cora            # or "cora,pubmed" (runs datasets sequentially)
+#   GPUS=0,1                 # 2 GPUs: topo + notopo
+#   NUM_EPOCHS=20
 #   OUTPUT_ROOT=/home/lingjie7/auto-research/projects/dlm-graph/.models
 #   RUN_TAG=mytag
 #   USE_SRUN=0
@@ -37,31 +41,33 @@ if [[ ! -f "${SFT_SCRIPT}" ]]; then
   exit 1
 fi
 
-IFS=',' read -r -a GPU_LIST <<< "${GPUS:-0,1,2,3}"
-if [[ ${#GPU_LIST[@]} -lt 4 ]]; then
-  echo "Need at least 4 GPU ids in GPUS (example: GPUS=0,1,2,3)." >&2
+IFS=',' read -r -a GPU_LIST <<< "${GPUS:-0,1}"
+if [[ ${#GPU_LIST[@]} -lt 2 ]]; then
+  echo "Need at least 2 GPU ids in GPUS (example: GPUS=0,1)." >&2
   exit 1
 fi
 
 BASE_MODEL="${BASE_MODEL:-GSAI-ML/LLaDA-8B-Instruct}"
-DATASET_NAME="${DATASET_NAME:-cora}"
+IFS=',' read -r -a DATASET_LIST <<< "${DATASETS:-cora}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_ROOT}/.models}"
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
 
-NUM_EPOCHS="${NUM_EPOCHS:-5}"
+NUM_EPOCHS="${NUM_EPOCHS:-20}"
 LEARNING_RATE="${LEARNING_RATE:-5e-5}"
 PER_DEVICE_TRAIN_BATCH_SIZE="${PER_DEVICE_TRAIN_BATCH_SIZE:-2}"
 PER_DEVICE_EVAL_BATCH_SIZE="${PER_DEVICE_EVAL_BATCH_SIZE:-4}"
 GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-8}"
 MAX_NEIGHBORS_PER_HOP="${MAX_NEIGHBORS_PER_HOP:-10}"
 POSITION_ID_TYPE="${POSITION_ID_TYPE:-sequential}"
-PROMPT_FORMAT="${PROMPT_FORMAT:-mc_digit}"
-MAX_ANSWER_TOKENS="${MAX_ANSWER_TOKENS:-1}"
+PROMPT_FORMAT="${PROMPT_FORMAT:-category_infill}"
+MAX_ANSWER_TOKENS="${MAX_ANSWER_TOKENS:-6}"
+INCLUDE_NEIGHBOR_LABELS="${INCLUDE_NEIGHBOR_LABELS:-True}"
+NEIGHBOR_LABEL_FORMAT="${NEIGHBOR_LABEL_FORMAT:-bracket}"
 GRADIENT_CHECKPOINTING="${GRADIENT_CHECKPOINTING:-True}"
 CLS_LOSS_WEIGHT="${CLS_LOSS_WEIGHT:-0.0}"
 REPORT_TO="${REPORT_TO:-wandb}"
 
-LORA_R="${LORA_R:-32}"
+LORA_R="${LORA_R:-64}"
 LORA_ALPHA="${LORA_ALPHA:-64}"
 LORA_TARGET_MODULES="${LORA_TARGET_MODULES:-all-linear}"
 
@@ -70,8 +76,6 @@ SRUN_TIME="${SRUN_TIME:-03:00:00}"
 CPUS_PER_TASK="${CPUS_PER_TASK:-24}"
 
 declare -a EXPERIMENTS=(
-  "1 True topo"
-  "1 False notopo"
   "2 True topo"
   "2 False notopo"
 )
@@ -90,79 +94,95 @@ cleanup() {
 }
 trap cleanup INT TERM
 
-for i in "${!EXPERIMENTS[@]}"; do
-  read -r max_hops use_topology_mask topo_name <<< "${EXPERIMENTS[$i]}"
-  gpu_id="${GPU_LIST[$i]}"
+run_dataset_pair() {
+  local dataset_name="$1"
+  PIDS=()
+  JOB_NAMES=()
 
-  run_name="${DATASET_NAME}-${max_hops}hop-${topo_name}-lora-${RUN_TAG}"
-  output_dir="${OUTPUT_ROOT}/tmdlm-llada-8b-${run_name}"
-  log_file="${OUTPUT_ROOT}/${run_name}.log"
+  for i in "${!EXPERIMENTS[@]}"; do
+    read -r max_hops use_topology_mask topo_name <<< "${EXPERIMENTS[$i]}"
+    gpu_id="${GPU_LIST[$i]}"
 
-  cmd=(
-    "${PYTHON_BIN}" "${SFT_SCRIPT}"
-    --model_name_or_path "${BASE_MODEL}"
-    --dataset_name "${DATASET_NAME}"
-    --max_hops "${max_hops}"
-    --use_topology_mask "${use_topology_mask}"
-    --position_id_type "${POSITION_ID_TYPE}"
-    --max_neighbors_per_hop "${MAX_NEIGHBORS_PER_HOP}"
-    --prompt_format "${PROMPT_FORMAT}"
-    --max_answer_tokens "${MAX_ANSWER_TOKENS}"
-    --output_dir "${output_dir}"
-    --num_train_epochs "${NUM_EPOCHS}"
-    --learning_rate "${LEARNING_RATE}"
-    --per_device_train_batch_size "${PER_DEVICE_TRAIN_BATCH_SIZE}"
-    --per_device_eval_batch_size "${PER_DEVICE_EVAL_BATCH_SIZE}"
-    --gradient_accumulation_steps "${GRAD_ACCUM_STEPS}"
-    --gradient_checkpointing "${GRADIENT_CHECKPOINTING}"
-    --cls_loss_weight "${CLS_LOSS_WEIGHT}"
-    --report_to "${REPORT_TO}"
-    --run_name "${run_name}"
-    --lora True
-    --r "${LORA_R}"
-    --lora_alpha "${LORA_ALPHA}"
-    --target_modules "${LORA_TARGET_MODULES}"
-  )
+    run_name="tmdlm-llada-8b-${dataset_name}-${max_hops}hop-${topo_name}-catinfill-nbmask-noeospad-r${LORA_R}-ep${NUM_EPOCHS}-${RUN_TAG}"
+    output_dir="${OUTPUT_ROOT}/${run_name}"
+    log_file="${OUTPUT_ROOT}/${run_name}.log"
 
-  if [[ -n "${EXTRA_ARGS:-}" ]]; then
-    # shellcheck disable=SC2206
-    extra_args=( ${EXTRA_ARGS} )
-    cmd+=("${extra_args[@]}")
-  fi
+    cmd=(
+      "${PYTHON_BIN}" "${SFT_SCRIPT}"
+      --model_name_or_path "${BASE_MODEL}"
+      --dataset_name "${dataset_name}"
+      --max_hops "${max_hops}"
+      --use_topology_mask "${use_topology_mask}"
+      --position_id_type "${POSITION_ID_TYPE}"
+      --max_neighbors_per_hop "${MAX_NEIGHBORS_PER_HOP}"
+      --prompt_format "${PROMPT_FORMAT}"
+      --max_answer_tokens "${MAX_ANSWER_TOKENS}"
+      --include_neighbor_labels "${INCLUDE_NEIGHBOR_LABELS}"
+      --neighbor_label_format "${NEIGHBOR_LABEL_FORMAT}"
+      --output_dir "${output_dir}"
+      --num_train_epochs "${NUM_EPOCHS}"
+      --learning_rate "${LEARNING_RATE}"
+      --per_device_train_batch_size "${PER_DEVICE_TRAIN_BATCH_SIZE}"
+      --per_device_eval_batch_size "${PER_DEVICE_EVAL_BATCH_SIZE}"
+      --gradient_accumulation_steps "${GRAD_ACCUM_STEPS}"
+      --gradient_checkpointing "${GRADIENT_CHECKPOINTING}"
+      --cls_loss_weight "${CLS_LOSS_WEIGHT}"
+      --report_to "${REPORT_TO}"
+      --run_name "${run_name}"
+      --lora True
+      --r "${LORA_R}"
+      --lora_alpha "${LORA_ALPHA}"
+      --target_modules "${LORA_TARGET_MODULES}"
+    )
 
-  echo "[launch] gpu=${gpu_id} hops=${max_hops} topo_mask=${use_topology_mask} output=${output_dir}"
-  echo "[log] ${log_file}"
-
-  if [[ "${USE_SRUN}" == "1" ]]; then
-    if [[ -z "${PARTITION:-}" || -z "${QUOTATYPE:-}" ]]; then
-      echo "USE_SRUN=1 requires PARTITION and QUOTATYPE env vars." >&2
-      exit 1
+    if [[ -n "${EXTRA_ARGS:-}" ]]; then
+      # shellcheck disable=SC2206
+      extra_args=( ${EXTRA_ARGS} )
+      cmd+=("${extra_args[@]}")
     fi
-    (
-      srun -p "${PARTITION}" --quotatype="${QUOTATYPE}" \
-        --gres=gpu:1 --cpus-per-task="${CPUS_PER_TASK}" --time="${SRUN_TIME}" \
-        "${cmd[@]}"
-    ) >"${log_file}" 2>&1 &
-  else
-    (
-      CUDA_VISIBLE_DEVICES="${gpu_id}" "${cmd[@]}"
-    ) >"${log_file}" 2>&1 &
-  fi
 
-  PIDS+=("$!")
-  JOB_NAMES+=("${run_name}")
+    echo "[launch] dataset=${dataset_name} gpu=${gpu_id} hops=${max_hops} topo_mask=${use_topology_mask} output=${output_dir}"
+    echo "[log] ${log_file}"
+
+    if [[ "${USE_SRUN}" == "1" ]]; then
+      if [[ -z "${PARTITION:-}" || -z "${QUOTATYPE:-}" ]]; then
+        echo "USE_SRUN=1 requires PARTITION and QUOTATYPE env vars." >&2
+        exit 1
+      fi
+      (
+        srun -p "${PARTITION}" --quotatype="${QUOTATYPE}" \
+          --gres=gpu:1 --cpus-per-task="${CPUS_PER_TASK}" --time="${SRUN_TIME}" \
+          "${cmd[@]}"
+      ) >"${log_file}" 2>&1 &
+    else
+      (
+        CUDA_VISIBLE_DEVICES="${gpu_id}" "${cmd[@]}"
+      ) >"${log_file}" 2>&1 &
+    fi
+
+    PIDS+=("$!")
+    JOB_NAMES+=("${run_name}")
+  done
+
+  local failed=0
+  for i in "${!PIDS[@]}"; do
+    pid="${PIDS[$i]}"
+    job="${JOB_NAMES[$i]}"
+    if wait "${pid}"; then
+      echo "[done] ${job} (pid=${pid})"
+    else
+      echo "[fail] ${job} (pid=${pid})" >&2
+      failed=1
+    fi
+  done
+  return "${failed}"
+}
+
+overall_failed=0
+for dataset_name in "${DATASET_LIST[@]}"; do
+  if ! run_dataset_pair "${dataset_name}"; then
+    overall_failed=1
+  fi
 done
 
-failed=0
-for i in "${!PIDS[@]}"; do
-  pid="${PIDS[$i]}"
-  job="${JOB_NAMES[$i]}"
-  if wait "${pid}"; then
-    echo "[done] ${job} (pid=${pid})"
-  else
-    echo "[fail] ${job} (pid=${pid})" >&2
-    failed=1
-  fi
-done
-
-exit "${failed}"
+exit "${overall_failed}"

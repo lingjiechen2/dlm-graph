@@ -75,10 +75,28 @@ class DataArguments:
             "help": "Prompt format: 'mc_digit' (digit answer) or 'category_infill' (class-name infill with eos padding)"
         },
     )
+    answer_label_style: str = field(
+        default="digit0",
+        metadata={
+            "help": "Answer label style for mc_digit prompts: digit0 | number1 | letter"
+        },
+    )
     max_answer_tokens: int = field(
         default=1,
         metadata={
-            "help": "Answer token budget. Use 1 for mc_digit; 4-6 for category_infill (short class names + eos fill)"
+            "help": "Answer token budget. Use 1 for mc_digit; 4-6 for category_infill (real answer supervised, reserved tail kept as unsupervised mask placeholders)"
+        },
+    )
+    include_neighbor_labels: bool = field(
+        default=False,
+        metadata={
+            "help": "If True, inject neighbor class names into the prompt and supervise those class-name tokens."
+        },
+    )
+    neighbor_label_format: str = field(
+        default="bracket",
+        metadata={
+            "help": "Neighbor label phrasing when include_neighbor_labels=True: bracket|paren|sentence|colon"
         },
     )
     use_topology_mask: bool = field(
@@ -125,7 +143,10 @@ def train():
             max_hops=data_args.max_hops,
             mask_target_text=data_args.mask_target_text,
             prompt_format=data_args.prompt_format,
+            answer_label_style=data_args.answer_label_style,
             max_answer_tokens=data_args.max_answer_tokens,
+            include_neighbor_labels=data_args.include_neighbor_labels,
+            neighbor_label_format=data_args.neighbor_label_format,
         )
         train_dataset = load_tag_dataset(
             data_args.dataset_name, split="train", **_common_kwargs

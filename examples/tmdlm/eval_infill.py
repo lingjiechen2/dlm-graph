@@ -36,6 +36,7 @@ from dllm.data.graph import (
     load_tag_dataset,
     DATASET_CONFIGS,
     get_class_token_ids,
+    get_answer_labels,
 )
 from dllm.pipelines.tmdlm.utils import GraphDataCollator
 
@@ -88,6 +89,13 @@ class EvalInfillArgs:
             "choices": ["mc_digit", "category_infill"],
         },
     )
+    answer_label_style: str = field(
+        default="digit0",
+        metadata={
+            "help": "MC answer label style: digit0 | number1 | letter",
+            "choices": ["digit0", "number1", "letter"],
+        },
+    )
     use_chat_template: bool = field(
         default=False,
         metadata={"help": "Wrap prompt in LLaDA-Instruct chat template"},
@@ -117,8 +125,8 @@ class EvalInfillArgs:
         default=0,
         metadata={
             "help": "Generation window length (# mask tokens placed in answer region). "
-            "0 = auto (= max_answer_tokens). Larger values let the model write past the "
-            "class name (e.g. trailing punctuation / extra words)."
+            "0 = auto (mc_digit: max_answer_tokens; category_infill: max(max_answer_tokens, 6)). "
+            "Larger values let the model write past the class name (e.g. trailing punctuation / extra words)."
         },
     )
     use_topology_mask: bool = field(
@@ -142,7 +150,13 @@ def _normalize(s: str) -> str:
     return s
 
 
-def match_prediction(decoded: str, class_names, num_classes, prompt_format):
+def match_prediction(
+    decoded: str,
+    class_names,
+    num_classes,
+    prompt_format,
+    answer_labels,
+):
     """
     Two-tier matching over an open-ended decoded generation.
 
@@ -152,10 +166,11 @@ def match_prediction(decoded: str, class_names, num_classes, prompt_format):
 
     Matching priority:
       1. Normalized class-name hit (exact or substring either direction)
-      2. Digit hit ("0", "1", ..., "N-1") — lenient only
+      2. Answer-label hit ("0"/"1"/..., "1"/"2"/..., or "a"/"b"/...) depending on style
     """
     decoded_norm = _normalize(decoded)
     name_norms = [_normalize(n) for n in class_names]
+    label_norms = [_normalize(lbl) for lbl in answer_labels]
 
     # Class-name hit (exact or substring)
     name_hit = -1
@@ -169,20 +184,21 @@ def match_prediction(decoded: str, class_names, num_classes, prompt_format):
                 name_hit = k
                 break
 
-    # Digit hit — scan tokens, pick first standalone digit in [0, N-1]
-    digit_hit = -1
+    label_hit = -1
     for tok in decoded_norm.split():
-        if tok.isdigit():
-            v = int(tok)
-            if 0 <= v < num_classes:
-                digit_hit = v
+        for k, lbl in enumerate(label_norms):
+            if tok == lbl:
+                label_hit = k
                 break
+        if label_hit != -1:
+            break
 
-    # Strict: class-name only
-    pred_strict = name_hit
-
-    # Lenient: class-name preferred, otherwise digit
-    pred_lenient = name_hit if name_hit != -1 else digit_hit
+    if prompt_format == "category_infill":
+        pred_strict = name_hit
+        pred_lenient = name_hit if name_hit != -1 else label_hit
+    else:
+        pred_strict = label_hit
+        pred_lenient = label_hit if label_hit != -1 else name_hit
 
     return pred_strict, pred_lenient
 
@@ -270,6 +286,7 @@ def evaluate_with_sampler(
     temperature=0.0,
     remasking="low_confidence",
     prompt_format="mc_digit",
+    answer_label_style="digit0",
     use_topology_mask=False,
     max_samples=0,
 ):
@@ -313,12 +330,14 @@ def evaluate_with_sampler(
     all_strict = []
     all_lenient = []
     all_decoded = []
+    answer_labels = get_answer_labels(num_classes, style=answer_label_style)
     no_match_count = 0
 
     num_samples = len(test_dataset)
     if max_samples and max_samples > 0:
         num_samples = min(num_samples, max_samples)
-    for idx in tqdm(range(num_samples), desc="Evaluating"):
+    pbar = tqdm(range(num_samples), desc="Evaluating")
+    for idx in pbar:
         s = test_dataset[idx]
         ids = list(s["input_ids"])
         pos = s["label_token_pos"]
@@ -390,7 +409,11 @@ def evaluate_with_sampler(
         all_decoded.append(decoded)
 
         pred_strict, pred_lenient = match_prediction(
-            decoded, class_names, num_classes, prompt_format
+            decoded,
+            class_names,
+            num_classes,
+            prompt_format,
+            answer_labels,
         )
         all_strict.append(pred_strict)
         all_lenient.append(pred_lenient)
@@ -405,6 +428,13 @@ def evaluate_with_sampler(
         if pred_strict == -1 and pred_lenient == -1:
             no_match_count += 1
         total += 1
+
+        running_strict = 100.0 * correct_strict / total if total > 0 else 0.0
+        running_lenient = 100.0 * correct_lenient / total if total > 0 else 0.0
+        pbar.set_postfix(
+            strict=f"{running_strict:.2f}%",
+            lenient=f"{running_lenient:.2f}%",
+        )
 
     strict_acc = 100.0 * correct_strict / total if total > 0 else 0.0
     lenient_acc = 100.0 * correct_lenient / total if total > 0 else 0.0
@@ -462,9 +492,11 @@ def main():
         tokenizer,
         max_answer_tokens=args.max_answer_tokens,
         prompt_format=args.prompt_format,
+        answer_label_style=args.answer_label_style,
     )
-    # For category_infill, auto-compute max_answer_tokens from class token lists
-    if args.prompt_format == "category_infill":
+    # For category_infill, optionally auto-compute max_answer_tokens.
+    # Keep explicit user value when > 0 so eval can match train-time reserve.
+    if args.prompt_format == "category_infill" and args.max_answer_tokens <= 0:
         args.max_answer_tokens = len(class_token_ids[0])
         logger.info(
             "category_infill: max_answer_tokens auto-set to %d",
@@ -487,6 +519,7 @@ def main():
         prompt_layout=args.prompt_layout,
         use_chat_template=args.use_chat_template,
         prompt_format=args.prompt_format,
+        answer_label_style=args.answer_label_style,
         include_neighbor_labels=args.include_neighbor_labels,
         neighbor_label_format=args.neighbor_label_format,
     )
@@ -504,7 +537,10 @@ def main():
 
     # Resolve generation window length
     if args.max_new_tokens <= 0:
-        args.max_new_tokens = args.max_answer_tokens
+        if args.prompt_format == "category_infill":
+            args.max_new_tokens = max(args.max_answer_tokens, 6)
+        else:
+            args.max_new_tokens = args.max_answer_tokens
     logger.info(
         "Generation window: max_new_tokens=%d (answer reserve=%d)",
         args.max_new_tokens,
@@ -534,6 +570,7 @@ def main():
         temperature=args.temperature,
         remasking=args.remasking,
         prompt_format=args.prompt_format,
+        answer_label_style=args.answer_label_style,
         use_topology_mask=args.use_topology_mask,
         max_samples=args.max_samples,
     )
@@ -641,6 +678,7 @@ def main():
             "max_new_tokens": args.max_new_tokens,
             "prompt_layout": args.prompt_layout,
             "prompt_format": args.prompt_format,
+            "answer_label_style": args.answer_label_style,
             "use_chat_template": args.use_chat_template,
             "include_neighbor_labels": args.include_neighbor_labels,
             "neighbor_label_format": args.neighbor_label_format,

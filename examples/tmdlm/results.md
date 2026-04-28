@@ -70,7 +70,7 @@ Baseline source: "When Do LLMs Help With Node Classification?" (arXiv:2502.00829
 
 ## PubMed (3 classes, supervised setting)
 
-Baseline source: arXiv:2502.00829, Table 2, supervised setting. Standard Planetoid split (1000 test nodes).
+Baseline source: [LLaGA, Table 1 (Single Focus)](https://arxiv.org/pdf/2402.08170), PubMed node classification.
 
 **Note**: Our PubMed results use a custom stratified split (999 test, 333/class) from TAPE data files, not the standard Planetoid split. Direct comparison with baselines is approximate.
 
@@ -79,18 +79,15 @@ Baseline source: arXiv:2502.00829, Table 2, supervised setting. Standard Planeto
 
 | Method                            | Type                  | Accuracy       | Source           |
 | --------------------------------- | --------------------- | -------------- | ---------------- |
-| RoBERTa-355M                      | LM only               | 94.84 +/- 0.06 | arXiv:2502.00829 |
-| SentenceBERT-66M                  | LM only               | 94.47 +/- 0.33 | arXiv:2502.00829 |
-| GLEM                              | GNN + LLM             | 93.98 +/- 0.32 | arXiv:2502.00829 |
-| GraphGPT                          | LLM + Graph           | 93.54 +/- 0.22 | arXiv:2502.00829 |
-| TAPE                              | LLM-as-Reasoner       | 93.00 +/- 0.13 | arXiv:2502.00829 |
-| GraphSAGE (ShallowEmb)            | GNN                   | 90.47 +/- 0.25 | arXiv:2502.00829 |
-| LLaGA                             | LLM + Graph Projector | 90.28 +/- 0.91 | arXiv:2502.00829 |
-| ENGINE                            | GNN + LLM             | 90.08 +/- 0.16 | arXiv:2502.00829 |
-| GCN (ShallowEmb)                  | GNN                   | 89.01 +/- 0.59 | arXiv:2502.00829 |
+| SAGN                              | GNN                   | 95.17          | arXiv:2402.08170 |
+| LLaGA-ND-7B                       | LLM + Graph Projector | 95.03          | arXiv:2402.08170 |
+| LLaGA-HO-7B                       | LLM + Graph Projector | 95.03          | arXiv:2402.08170 |
+| NodeFormer                        | Graph Transformer     | 94.90          | arXiv:2402.08170 |
+| GraphSAGE                         | GNN                   | 94.87          | arXiv:2402.08170 |
+| GCN                               | GNN                   | 92.96          | arXiv:2402.08170 |
+| GAT                               | GNN                   | 92.33          | arXiv:2402.08170 |
 | **Ours: Frozen MC (target-only)** | **DLM zero-shot**     | **88.69%**     | —                |
-| GCN + LLM Emb                     | GNN + LLM embeddings  | 88.38 +/- 0.68 | arXiv:2502.00829 |
-| GAT (ShallowEmb)                  | GNN                   | 88.25 +/- 0.47 | arXiv:2502.00829 |
+| SGC                               | GNN                   | 87.35          | arXiv:2402.08170 |
 | Ours: Frozen MC (1-hop full attn) | DLM zero-shot         | 84.78%         | —                |
 | Ours: Frozen MC (1-hop topo mask) | DLM zero-shot         | 82.98%         | —                |
 
@@ -103,6 +100,5 @@ Baseline source: arXiv:2502.00829, Table 2, supervised setting. Standard Planeto
 | Target-only     | 86.2%           | 83.5%     | 96.4%     | 88.69%  |
 | 1-hop full attn | 69.7%           | 87.1%     | 97.6%     | 84.78%  |
 | 1-hop topo mask | 62.2%           | 89.2%     | 97.6%     | 82.98%  |
-
 
 

@@ -71,45 +71,87 @@ CUDA_VISIBLE_DEVICES=0 python examples/tmdlm/run_experiments.py \
 ### SFT with LoRA
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python examples/tmdlm/sft.py \
+CUDA_VISIBLE_DEVICES=0 python /home/lingjie7/auto-research/projects/dlm-graph/examples/tmdlm/sft.py \
     --model_name_or_path GSAI-ML/LLaDA-8B-Instruct \
-    --dataset_name cora --max_hops 0 \
+    --dataset_name cora \
+    --max_hops 2 \
+    --use_topology_mask True \
+    --max_neighbors_per_hop 10 \
+    --prompt_format category_infill \
+    --max_answer_tokens 6 \
+    --include_neighbor_labels True \
+    --neighbor_label_format bracket \
     --per_device_train_batch_size 2 --gradient_accumulation_steps 8 \
-    --learning_rate 5e-5 --num_train_epochs 5 \
-    --output_dir .models/tmdlm-llada-8b-cora-na-na-target-ckpt \
-    --gradient_checkpointing True --cls_loss_weight 0.0
+    --learning_rate 5e-5 --num_train_epochs 20 \
+    --output_dir .models/tmdlm-llada-8b-cora-2hop-topo-catinfill-nbmask-noeospad-r64-ep20 \
+    --gradient_checkpointing True --cls_loss_weight 1.0 \
+    --lora True --r 64 --lora_alpha 64 --target_modules all-linear
+```
+
+Latest paired launcher (topo/notopo, default 2 GPUs):
+
+```bash
+# Cora only
+GPUS=0,1 DATASETS=cora \
+  bash /home/lingjie7/auto-research/projects/dlm-graph/examples/tmdlm/run_sft_cora_hops_topo_lora.sh
+
+# Cora then PubMed (sequential datasets, each dataset launches topo+notopo)
+GPUS=0,1 DATASETS=cora,pubmed \
+  bash /home/lingjie7/auto-research/projects/dlm-graph/examples/tmdlm/run_sft_cora_hops_topo_lora.sh
 ```
 
 ## Results
 
 ### Cora (7 classes, 542 test nodes, supervised setting)
 
-Baselines from arXiv:2502.00829, Table 2.
+Baselines from [LLaGA, Table 1 (Single Focus)](https://arxiv.org/pdf/2402.08170), Cora node classification.
 
 | Method | Type | Accuracy |
 |--------|------|----------|
-| GCN + LLM Emb | GNN + LLM embeddings | 88.15% |
-| TAPE | LLM-as-Reasoner | 88.05% |
-| LLaGA | LLM + Graph Projector | 87.55% |
-| GraphSAGE | GNN | 87.44% |
-| GCN | GNN | 87.41% |
-| **Ours: SFT (1-hop + topo mask)** | **DLM + LoRA (best: checkpoint-408)** | **84.87%** |
-| Ours: SFT (1-hop, no topo mask) | DLM + LoRA (best: checkpoint-816) | 84.13% |
-| Ours: SFT (2-hop + topo mask) | DLM + LoRA (best: checkpoint-510) | 83.95% |
-| Ours: SFT (2-hop, no topo mask) | DLM + LoRA (best: checkpoint-510) | 84.50% |
+| LLaGA-HO-7B | LLM + Graph Projector | 89.22% |
+| SAGN | GNN | 89.19% |
+| GAT | GNN | 88.97% |
+| GCN | GNN | 88.93% |
+| GraphSAGE | GNN | 88.89% |
+| LLaGA-ND-7B | LLM + Graph Projector | 88.86% |
+| NodeFormer | Graph Transformer | 88.23% |
+| SGC | GNN | 87.97% |
+| **Ours: SFT (2-hop + topo, label-on, eval_logit)** | **DLM + LoRA (best: checkpoint-final)** | **90.41%** |
+| Ours: SFT (2-hop + no topo, label-on, eval_logit) | DLM + LoRA (best: checkpoint-1428) | 90.22% |
+| Ours: SFT (2-hop + topo, label-on, eval_infill lenient) | DLM + LoRA (best: checkpoint-2040) | 87.45% |
+| Ours: SFT (2-hop + no topo, label-on, eval_infill lenient) | DLM + LoRA (best: checkpoint-2040) | 89.48% |
+| Ours: Frozen (2-hop + topo, label-on, eval_logit) | DLM zero-shot | 37.82% |
+| Ours: Frozen (2-hop + no topo, label-on, eval_logit) | DLM zero-shot | 33.03% |
+| Ours: Frozen (2-hop + topo, label-on, eval_infill lenient) | DLM zero-shot | 57.01% |
+| Ours: Frozen (2-hop + no topo, label-on, eval_infill lenient) | DLM zero-shot | 60.52% |
 | RoBERTa-355M | LM only | 83.17% |
-| Ours: Frozen MC | DLM zero-shot | 62.73% |
+| Ours: Frozen MC (target-only, legacy setting) | DLM zero-shot | 62.73% |
+
+Latest SFT rows above are from:
+`/home/lingjie7/auto-research/projects/dlm-graph/summaries/cora_noeospad_allckpts_eval_gpu01_20260425_164435/summary.csv`.
+
+Latest frozen 2-hop label-on rows above are from:
+`/home/lingjie7/auto-research/projects/dlm-graph/summaries/cora_frozen_labelon_newest_gpu26_20260425_2102/jsonl`.
 
 ### PubMed (3 classes, zero-shot)
 
+Baselines from [LLaGA, Table 1 (Single Focus)](https://arxiv.org/pdf/2402.08170), PubMed node classification.
+
+Note: our PubMed result below is still a zero-shot DLM result on a custom stratified split, so comparison to supervised single-focus baselines is approximate.
+
 | Method | Type | Accuracy |
 |--------|------|----------|
-| RoBERTa-355M | LM only, supervised | 94.84% |
-| TAPE | supervised | 93.00% |
-| GCN | supervised | 89.01% |
+| SAGN | GNN | 95.17% |
+| LLaGA-ND-7B | LLM + Graph Projector | 95.03% |
+| LLaGA-HO-7B | LLM + Graph Projector | 95.03% |
+| NodeFormer | Graph Transformer | 94.90% |
+| GraphSAGE | GNN | 94.87% |
+| GCN | GNN | 92.96% |
+| GAT | GNN | 92.33% |
+| SGC | GNN | 87.35% |
 | **Ours: Frozen MC** | **DLM zero-shot** | **88.69%** |
 
-See [examples/tmdlm/results.md](examples/tmdlm/results.md) for full results.
+See [/home/lingjie7/auto-research/projects/dlm-graph/examples/tmdlm/results.md](/home/lingjie7/auto-research/projects/dlm-graph/examples/tmdlm/results.md) for full results.
 
 ### Neighbor Count Sweep (`nb` = 1/3/5/10/20)
 

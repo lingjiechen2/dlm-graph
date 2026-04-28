@@ -39,6 +39,84 @@ from dllm.pipelines.tmdlm.utils import GraphDataCollator
 logger = dllm.utils.get_default_logger(__name__)
 
 
+def _valid_class_token_lists(class_token_ids, tokenizer):
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+    return [[tok for tok in seq if tok != pad_id] for seq in class_token_ids]
+
+
+def _shared_prefix_len(token_lists):
+    if not token_lists:
+        return 0
+    prefix_len = 0
+    min_len = min(len(seq) for seq in token_lists)
+    while prefix_len < min_len:
+        tok = token_lists[0][prefix_len]
+        if all(seq[prefix_len] == tok for seq in token_lists[1:]):
+            prefix_len += 1
+        else:
+            break
+    return prefix_len
+
+
+def _predict_pubmed_hierarchical(
+    log_probs,
+    label_starts,
+    class_names,
+    class_token_ids_tensor,
+    tokenizer,
+):
+    """Hierarchical PubMed scorer.
+
+    Treat the shared prefix "Diabetes Mellitus" as prompt context. First compare
+    the next token for Experimental (",") against the Type branch ("Type"). If
+    Type wins, compare the following token between Type 1 and Type 2.
+    """
+    device = log_probs.device
+    token_lists = _valid_class_token_lists(class_token_ids_tensor.tolist(), tokenizer)
+    name_to_idx = {name: idx for idx, name in enumerate(class_names)}
+    exp_idx = name_to_idx["Diabetes Mellitus, Experimental"]
+    type1_idx = name_to_idx["Diabetes Mellitus Type 1"]
+    type2_idx = name_to_idx["Diabetes Mellitus Type 2"]
+
+    shared_len = _shared_prefix_len(token_lists)
+    type_shared_len = _shared_prefix_len([token_lists[type1_idx], token_lists[type2_idx]])
+
+    exp_branch_tok = token_lists[exp_idx][shared_len]
+    type_branch_tok = token_lists[type1_idx][shared_len]
+    type1_leaf_tok = token_lists[type1_idx][type_shared_len]
+    type2_leaf_tok = token_lists[type2_idx][type_shared_len]
+
+    branch_pos = shared_len
+    leaf_pos = type_shared_len
+
+    branch_abs_pos = label_starts + branch_pos
+    branch_scores = log_probs[
+        torch.arange(log_probs.shape[0], device=device),
+        branch_abs_pos,
+        :,
+    ][:, [exp_branch_tok, type_branch_tok]]
+    choose_exp = branch_scores[:, 0] >= branch_scores[:, 1]
+
+    preds = torch.full((log_probs.shape[0],), type1_idx, device=device, dtype=torch.long)
+    preds[choose_exp] = exp_idx
+
+    if (~choose_exp).any():
+        type_rows = (~choose_exp).nonzero(as_tuple=False).squeeze(-1)
+        leaf_abs_pos = label_starts[type_rows] + leaf_pos
+        leaf_scores = log_probs[
+            type_rows,
+            leaf_abs_pos,
+            :,
+        ][:, [type1_leaf_tok, type2_leaf_tok]]
+        preds[type_rows] = torch.where(
+            leaf_scores[:, 0] >= leaf_scores[:, 1],
+            torch.full_like(type_rows, type1_idx),
+            torch.full_like(type_rows, type2_idx),
+        )
+
+    return preds
+
+
 @dataclass
 class EvalLogitArgs:
     exp: str = field(metadata={"help": "Experiment name for logging"})
@@ -86,6 +164,13 @@ class EvalLogitArgs:
             "choices": ["mc_digit", "category_infill"],
         },
     )
+    answer_label_style: str = field(
+        default="digit0",
+        metadata={
+            "help": "MC answer label style: digit0 | number1 | letter",
+            "choices": ["digit0", "number1", "letter"],
+        },
+    )
     include_neighbor_labels: bool = field(
         default=False,
         metadata={
@@ -113,12 +198,15 @@ class EvalLogitArgs:
 def evaluate_layer0(
     model,
     tokenizer,
+    class_names,
     test_dataset,
     class_first_token_ids,
     batch_size=8,
     use_topology_mask=False,
     position_id_type="sequential",
     max_answer_tokens=1,
+    dataset_name="cora",
+    prompt_format="mc_digit",
 ):
     """
     Layer 0 evaluation: frozen model, mask answer tokens, single forward pass,
@@ -228,32 +316,41 @@ def evaluate_layer0(
             pos_expanded = label_indices.unsqueeze(-1).expand(-1, -1, logits.shape[-1])
             ans_log_probs = log_probs.gather(1, pos_expanded)  # [b, max_ans_len, V]
 
-            # For each class k, gather log-probs for its tokens: [b, K]
-            # class_token_ids_tensor: [K, max_ans_len] -> expand to [b, K, max_ans_len]
-            K = class_token_ids_tensor.shape[0]
-            cls_ids = class_token_ids_tensor.unsqueeze(0).expand(
-                b, -1, -1
-            )  # [b, K, max_ans_len]
+            if dataset_name == "pubmed" and prompt_format == "category_infill":
+                preds = _predict_pubmed_hierarchical(
+                    log_probs=log_probs,
+                    label_starts=label_indices[:, 0],
+                    class_names=class_names,
+                    class_token_ids_tensor=class_token_ids_tensor,
+                    tokenizer=tokenizer,
+                )
+            else:
+                # For each class k, gather log-probs for its tokens: [b, K]
+                # class_token_ids_tensor: [K, max_ans_len] -> expand to [b, K, max_ans_len]
+                K = class_token_ids_tensor.shape[0]
+                cls_ids = class_token_ids_tensor.unsqueeze(0).expand(
+                    b, -1, -1
+                )  # [b, K, max_ans_len]
 
-            # ans_log_probs: [b, max_ans_len, V] -> for each position, gather the K class tokens
-            scores = torch.zeros(b, K, device=device)
-            # Build validity mask: position j is valid if token != pad_token_id
-            pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
-            cls_valid = class_token_ids_tensor != pad_id  # [K, max_ans_len]
+                # ans_log_probs: [b, max_ans_len, V] -> for each position, gather the K class tokens
+                scores = torch.zeros(b, K, device=device)
+                # Build validity mask: position j is valid if token != pad_token_id
+                pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+                cls_valid = class_token_ids_tensor != pad_id  # [K, max_ans_len]
 
-            for j in range(ans_len):
-                pos_logprobs = ans_log_probs[:, j, :]  # [b, V]
-                cls_tokens_j = cls_ids[:, :, j]  # [b, K]
-                token_scores = pos_logprobs.gather(1, cls_tokens_j)  # [b, K]
-                # Only add score if this position is valid for the class
-                valid_j = cls_valid[:, j].unsqueeze(0).expand(b, -1)  # [b, K]
-                scores += token_scores * valid_j.float()
+                for j in range(ans_len):
+                    pos_logprobs = ans_log_probs[:, j, :]  # [b, V]
+                    cls_tokens_j = cls_ids[:, :, j]  # [b, K]
+                    token_scores = pos_logprobs.gather(1, cls_tokens_j)  # [b, K]
+                    # Only add score if this position is valid for the class
+                    valid_j = cls_valid[:, j].unsqueeze(0).expand(b, -1)  # [b, K]
+                    scores += token_scores * valid_j.float()
 
-            # Normalize by number of valid tokens per class (mean log-prob)
-            cls_lengths = cls_valid.sum(dim=1).float().clamp(min=1)  # [K]
-            scores = scores / cls_lengths.unsqueeze(0)  # [b, K]
+                # Normalize by number of valid tokens per class (mean log-prob)
+                cls_lengths = cls_valid.sum(dim=1).float().clamp(min=1)  # [K]
+                scores = scores / cls_lengths.unsqueeze(0)  # [b, K]
 
-            preds = scores.argmax(dim=-1)  # [b]
+                preds = scores.argmax(dim=-1)  # [b]
 
         all_predictions.extend(preds.cpu().tolist())
 
@@ -305,10 +402,12 @@ def main():
         tokenizer,
         max_answer_tokens=args.max_answer_tokens,
         prompt_format=args.prompt_format,
+        answer_label_style=args.answer_label_style,
     )
 
-    # For category_infill, auto-compute max_answer_tokens from returned token IDs
-    if args.prompt_format == "category_infill":
+    # For category_infill, optionally auto-compute max_answer_tokens.
+    # Keep explicit user value when > 0 so eval can match train-time reserve.
+    if args.prompt_format == "category_infill" and args.max_answer_tokens <= 0:
         # class_first_token_ids is list[list[int]], infer max_answer_tokens
         args.max_answer_tokens = len(class_first_token_ids[0])
         logger.info("category_infill: max_answer_tokens=%d", args.max_answer_tokens)
@@ -346,6 +445,7 @@ def main():
         prompt_layout=args.prompt_layout,
         use_chat_template=args.use_chat_template,
         prompt_format=args.prompt_format,
+        answer_label_style=args.answer_label_style,
         include_neighbor_labels=args.include_neighbor_labels,
         neighbor_label_format=args.neighbor_label_format,
     )
@@ -369,12 +469,15 @@ def main():
     accuracy, per_class_correct, per_class_total, predictions = evaluate_layer0(
         model=model,
         tokenizer=tokenizer,
+        class_names=class_names,
         test_dataset=test_dataset,
         class_first_token_ids=class_first_token_ids,
         batch_size=args.batch_size,
         use_topology_mask=args.use_topology_mask,
         position_id_type=args.position_id_type,
         max_answer_tokens=args.max_answer_tokens,
+        dataset_name=args.dataset_name,
+        prompt_format=args.prompt_format,
     )
     elapsed = time.time() - t_start
 
@@ -427,6 +530,7 @@ def main():
             "prompt_layout": args.prompt_layout,
             "use_chat_template": args.use_chat_template,
             "prompt_format": args.prompt_format,
+            "answer_label_style": args.answer_label_style,
             "include_neighbor_labels": args.include_neighbor_labels,
             "neighbor_label_format": args.neighbor_label_format,
         },

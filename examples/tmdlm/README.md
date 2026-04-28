@@ -8,19 +8,19 @@ Instead of using GNN+LM pipelines or autoregressive LLMs, we use LLaDA (a masked
 
 ### How It Works
 
-1. Each node's text (title + abstract) is formatted as a multiple-choice prompt:
+1. Each node is formatted as `category_infill` prompt:
    ```
    Paper: <title>. <abstract>
    Options: 0) Case Based 1) Genetic Algorithms 2) Neural Networks ...
-   Answer: [MASK]
+   The category of this paper is: <class_name>
    ```
-2. Optionally, neighbor node texts are appended (without labels):
+2. Neighbor node texts can include labels (recommended for latest SFT):
    ```
-   Neighbor 1: <neighbor_title>. <neighbor_abstract>
+   Neighbor 1 [label: <class_name>]: <neighbor_title>. <neighbor_abstract>
    Neighbor 2: ...
    ```
-3. The model predicts the masked answer digit via a forward pass (frozen) or diffusion denoising (SFT).
-4. Classification is done by restricted argmax over digit token logits at the answer position.
+3. We reserve a fixed answer window (`max_answer_tokens=6`) for infill/eval compatibility.
+4. Training supervises only real answer tokens (`labels != -100`), and keeps reserved tail mask slots unsupervised (no eos-padding supervision).
 
 ## Key Concepts
 
@@ -67,12 +67,14 @@ This removes the concatenation-order bias in RoPE so all neighbors are positiona
 The SFT process uses the standard masked diffusion ELBO loss from the dllm framework:
 
 1. Sample a random timestep `t`
-2. Stochastically mask the answer token (the only position with `labels != -100`) with probability `1 - alpha(t)`
+2. Stochastically mask supervised answer tokens (`labels != -100`) with probability `1 - alpha(t)`
 3. Forward pass through the model with the topology mask applied
 4. Compute weighted cross-entropy at the masked position
 5. Optionally add an auxiliary classification CE loss on the answer position
 
-Only the answer digit token (1 token per sample) participates in the diffusion loss. LoRA is used for parameter-efficient fine-tuning.
+In latest `category_infill` training, supervised positions include:
+- target class-name tokens
+- (optional) neighbor class-name tokens when `include_neighbor_labels=True`
 
 ## Scripts
 
@@ -128,30 +130,53 @@ Key arguments:
 Fine-tunes LLaDA with LoRA on the training split using masked diffusion loss.
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python examples/tmdlm/sft.py \
+CUDA_VISIBLE_DEVICES=0 python /home/lingjie7/auto-research/projects/dlm-graph/examples/tmdlm/sft.py \
     --model_name_or_path GSAI-ML/LLaDA-8B-Instruct \
     --dataset_name cora \
-    --max_hops 0 \
+    --max_hops 2 \
+    --use_topology_mask True \
+    --max_neighbors_per_hop 10 \
+    --prompt_format category_infill \
+    --max_answer_tokens 6 \
+    --include_neighbor_labels True \
+    --neighbor_label_format bracket \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 8 \
     --learning_rate 5e-5 \
-    --num_train_epochs 5 \
-    --output_dir .models/tmdlm-llada-8b-cora-na-na-target-ckpt \
+    --num_train_epochs 20 \
+    --output_dir .models/tmdlm-llada-8b-cora-2hop-topo-catinfill-nbmask-noeospad-r64-ep20 \
     --gradient_checkpointing True \
-    --cls_loss_weight 0.0
+    --cls_loss_weight 1.0 \
+    --lora True --r 64 --lora_alpha 64 --target_modules all-linear
 ```
 
-Key training config (best result: 84.13% on Cora):
+Latest paired launcher (topo + notopo):
+
+```bash
+# Cora only
+GPUS=0,1 DATASETS=cora \
+  bash /home/lingjie7/auto-research/projects/dlm-graph/examples/tmdlm/run_sft_cora_hops_topo_lora.sh
+
+# Cora then PubMed
+GPUS=0,1 DATASETS=cora,pubmed \
+  bash /home/lingjie7/auto-research/projects/dlm-graph/examples/tmdlm/run_sft_cora_hops_topo_lora.sh
+```
+
+Key training config (latest recipe):
 | Parameter | Value |
 |-----------|-------|
-| LoRA rank | 32 |
+| Prompt format | `category_infill` |
+| Max hops | 2 |
+| Max neighbors per hop | 10 |
+| Max answer tokens | 6 |
+| Neighbor labels in prompt | True (`bracket`) |
+| LoRA rank | 64 |
 | LoRA alpha | 64 |
 | Target modules | all-linear |
-| Trainable params | 83.9M (1.04%) |
 | Learning rate | 5e-5 |
 | Effective batch size | 16 (bs=2 x grad_accum=8) |
-| Epochs | 5 (best at epoch 3) |
-| cls_loss_weight | 0.0 |
+| Epochs | 20 |
+| cls_loss_weight | 1.0 |
 
 ## Datasets
 
@@ -178,14 +203,29 @@ examples/tmdlm/
 
 ## Results
 
-See [results.md](results.md) for full evaluation results and baseline comparisons.
+See [/home/lingjie7/auto-research/projects/dlm-graph/examples/tmdlm/results.md](/home/lingjie7/auto-research/projects/dlm-graph/examples/tmdlm/results.md) for full evaluation results and baseline comparisons.
 
 Summary (Cora, supervised setting):
 
 | Method | Accuracy |
 |--------|----------|
-| SOTA (GCN+LLM Emb) | 88.15% |
-| TAPE | 88.05% |
-| LLaGA | 87.55% |
-| **Ours: SFT target-only (ep3)** | **84.13%** |
-| Ours: Frozen MC (target-only) | 62.73% |
+| LLaGA-HO-7B | 89.22% |
+| SAGN | 89.19% |
+| GAT | 88.97% |
+| GCN | 88.93% |
+| GraphSAGE | 88.89% |
+| LLaGA-ND-7B | 88.86% |
+| NodeFormer | 88.23% |
+| SGC | 87.97% |
+| **Ours: SFT (2-hop + topo, label-on, eval_logit)** | **90.41%** |
+| Ours: SFT (2-hop + no topo, label-on, eval_logit) | 90.22% |
+| Ours: SFT (2-hop + topo, label-on, eval_infill lenient) | 87.45% |
+| Ours: SFT (2-hop + no topo, label-on, eval_infill lenient) | 89.48% |
+| Ours: Frozen (2-hop + topo, label-on, eval_logit) | 37.82% |
+| Ours: Frozen (2-hop + no topo, label-on, eval_logit) | 33.03% |
+| Ours: Frozen (2-hop + topo, label-on, eval_infill lenient) | 57.01% |
+| Ours: Frozen (2-hop + no topo, label-on, eval_infill lenient) | 60.52% |
+| Ours: Frozen MC (target-only, legacy setting) | 62.73% |
+
+SFT source: `/home/lingjie7/auto-research/projects/dlm-graph/summaries/cora_noeospad_allckpts_eval_gpu01_20260425_164435/summary.csv`.
+Frozen 2-hop label-on source: `/home/lingjie7/auto-research/projects/dlm-graph/summaries/cora_frozen_labelon_newest_gpu26_20260425_2102/jsonl`.

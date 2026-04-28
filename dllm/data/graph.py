@@ -28,17 +28,25 @@ from datasets import load_dataset, Dataset
 HF_CACHE_ROOT = Path(
     os.environ.get("HF_DATASETS_CACHE", Path.home() / "datasets" / "huggingface")
 )
+LLAGA_DATA_ROOT = Path(
+    os.environ.get(
+        "LLAGA_DATA_ROOT",
+        "/home/lingjie7/auto-research/projects/dlm-graph/.datasets/llaga",
+    )
+)
 
 DATASET_CONFIGS = {
     "cora": {
         "hf_path": "xxhe/tape-cora",
         "cache_dir": HF_CACHE_ROOT / "xxhe___tape-cora",
         "pyg_root": HF_CACHE_ROOT / "pyg___cora",
+        "llaga_dir": LLAGA_DATA_ROOT / "cora",
         "pyg_name": "Cora",
         "num_classes": 7,
     },
     "pubmed": {
         "tape_dir": HF_CACHE_ROOT / "tape___pubmed" / "PubMed_orig",
+        "llaga_dir": LLAGA_DATA_ROOT / "pubmed",
         "num_classes": 3,
         "class_names": [
             "Diabetes Mellitus, Experimental",
@@ -107,6 +115,7 @@ DATASET_CONFIGS = {
     },
     "ogbn-arxiv": {
         "ogb_root": HF_CACHE_ROOT / "ogb___ogbn-arxiv" / "ogbn_arxiv",
+        "llaga_dir": LLAGA_DATA_ROOT / "ogbn-arxiv",
         "num_classes": 40,
         # Full category names (mapped from labelidx2arxivcategory.csv.gz order)
         "class_names": [
@@ -173,6 +182,68 @@ def _build_adjacency(edge_index: np.ndarray) -> dict[int, list[int]]:
     return dict(adj)
 
 
+def _normalize_llaga_class_name(name: str) -> str:
+    name = name.replace("_", " ").strip()
+    pubmed_map = {
+        "Diabetes Mellitus Experimental": "Diabetes Mellitus, Experimental",
+        "Diabetes Mellitus Type1": "Diabetes Mellitus Type 1",
+        "Diabetes Mellitus Type2": "Diabetes Mellitus Type 2",
+    }
+    return pubmed_map.get(name, name)
+
+
+def _load_llaga_processed_data(
+    config: dict,
+    split: str,
+) -> tuple[dict, dict, list[str], list[int]] | None:
+    llaga_dir = config.get("llaga_dir")
+    if llaga_dir is None:
+        return None
+    data_path = Path(llaga_dir) / "processed_data.pt"
+    if not data_path.exists():
+        return None
+
+    data = torch.load(data_path, map_location="cpu")
+    edge_index = data["edge_index"]
+    if hasattr(edge_index, "cpu"):
+        edge_index = edge_index.cpu().numpy()
+    adj = _build_adjacency(edge_index)
+
+    class_names = [_normalize_llaga_class_name(x) for x in list(data["label_texts"])]
+
+    titles = list(data["title"]) if "title" in data else [""] * int(data["num_nodes"])
+    abstracts = list(data["abs"]) if "abs" in data else [""] * int(data["num_nodes"])
+    labels = data["y"]
+    if hasattr(labels, "cpu"):
+        labels = labels.cpu().tolist()
+    else:
+        labels = list(labels)
+
+    node_data: dict[int, dict] = {}
+    for idx in range(int(data["num_nodes"])):
+        node_data[idx] = {
+            "title": titles[idx],
+            "abstract": abstracts[idx],
+            "label": int(labels[idx]),
+        }
+
+    split_key = {"train": "train_id", "val": "val_id", "test": "test_id"}[split]
+    if split_key in data:
+        split_ids = data[split_key]
+        if hasattr(split_ids, "cpu"):
+            split_ids = split_ids.cpu().tolist()
+        else:
+            split_ids = list(split_ids)
+    else:
+        mask_key = {"train": "train_mask", "val": "val_mask", "test": "test_mask"}[
+            split
+        ]
+        split_mask = data[mask_key]
+        split_ids = split_mask.nonzero(as_tuple=False).view(-1).cpu().tolist()
+    split_ids = [int(x) for x in split_ids]
+    return node_data, adj, class_names, split_ids
+
+
 def _sample_khop_neighbors(
     adj: dict[int, list[int]],
     node_id: int,
@@ -224,15 +295,40 @@ def _sample_khop_neighbors(
 # ---------------------------------------------------------------------------
 
 
-def get_answer_labels(num_classes: int) -> list[str]:
+ANSWER_LABEL_STYLES = ("digit0", "number1", "letter")
+
+
+def get_answer_labels(
+    num_classes: int,
+    style: str = "digit0",
+) -> list[str]:
     """
     Generate answer labels for MC format.
 
-    Always uses numeric labels: "0", "1", ..., "N-1".
-    For ≤10 classes these are single tokens; for >10 they are multi-token
-    but still natural MC answers that LLMs handle well.
+    Styles:
+      - digit0:  "0", "1", ..., "N-1"
+      - number1: "1", "2", ..., "N"
+      - letter:  "a", "b", ..., "z", "aa", ...
     """
-    return [str(i) for i in range(num_classes)]
+    if style == "digit0":
+        return [str(i) for i in range(num_classes)]
+    if style == "number1":
+        return [str(i + 1) for i in range(num_classes)]
+    if style == "letter":
+        labels = []
+        for i in range(num_classes):
+            n = i
+            chars = []
+            while True:
+                chars.append(chr(ord("a") + (n % 26)))
+                n = n // 26 - 1
+                if n < 0:
+                    break
+            labels.append("".join(reversed(chars)))
+        return labels
+    raise ValueError(
+        f"Unknown answer_label_style={style!r}; expected one of {ANSWER_LABEL_STYLES}"
+    )
 
 
 NEIGHBOR_LABEL_FORMATS = ("bracket", "paren", "sentence", "colon")
@@ -242,6 +338,7 @@ def _neighbor_prefix_str(
     idx: int,
     neighbor_labels: Optional[list[int]],
     class_names: list[str],
+    answer_labels: Optional[list[str]],
     include_neighbor_labels: bool,
     neighbor_label_format: str = "bracket",
 ) -> str:
@@ -257,6 +354,8 @@ def _neighbor_prefix_str(
         lbl = neighbor_labels[idx]
         if 0 <= lbl < len(class_names):
             cls = class_names[lbl]
+            if answer_labels is not None and lbl < len(answer_labels):
+                cls = f"{answer_labels[lbl]}. {cls}"
             n = idx + 1
             if neighbor_label_format == "bracket":
                 return f"\nNeighbor {n} [{cls}]: "
@@ -273,6 +372,71 @@ def _neighbor_prefix_str(
     return f"\nNeighbor {idx + 1}: "
 
 
+def _neighbor_prefix_tokens_and_label_span(
+    idx: int,
+    neighbor_labels: Optional[list[int]],
+    class_names: list[str],
+    answer_labels: Optional[list[str]],
+    include_neighbor_labels: bool,
+    neighbor_label_format: str,
+    tok_fn,
+) -> tuple[list[int], Optional[tuple[int, int]]]:
+    """
+    Build neighbor prefix tokens and, when present, return class-label token span.
+
+    Returns:
+        prefix_tokens: tokenized neighbor prefix
+        label_span: (start, end) token span of the neighbor class label within
+            prefix_tokens, or None if no neighbor label is injected.
+    """
+    if (
+        include_neighbor_labels
+        and neighbor_labels is not None
+        and idx < len(neighbor_labels)
+        and neighbor_labels[idx] is not None
+    ):
+        lbl = neighbor_labels[idx]
+        if 0 <= lbl < len(class_names):
+            cls = class_names[lbl]
+            if answer_labels is not None and lbl < len(answer_labels):
+                cls = f"{answer_labels[lbl]}. {cls}"
+            n = idx + 1
+            if neighbor_label_format == "bracket":
+                pre = f"\nNeighbor {n} ["
+                post = "]: "
+            elif neighbor_label_format == "paren":
+                pre = f"\nNeighbor {n} (category: "
+                post = "): "
+            elif neighbor_label_format == "sentence":
+                pre = f"\nNeighbor {n} is a "
+                post = " paper: "
+            elif neighbor_label_format == "colon":
+                pre = f"\nNeighbor {n} — "
+                post = ": "
+            else:
+                raise ValueError(
+                    f"Unknown neighbor_label_format={neighbor_label_format!r}; "
+                    f"expected one of {NEIGHBOR_LABEL_FORMATS}"
+                )
+
+            pre_toks = tok_fn(pre)
+            cls_toks = tok_fn(cls)
+            post_toks = tok_fn(post)
+            start = len(pre_toks)
+            end = start + len(cls_toks)
+            return pre_toks + cls_toks + post_toks, (start, end)
+
+    prefix = _neighbor_prefix_str(
+        idx=idx,
+        neighbor_labels=neighbor_labels,
+        class_names=class_names,
+        answer_labels=answer_labels,
+        include_neighbor_labels=include_neighbor_labels,
+        neighbor_label_format=neighbor_label_format,
+    )
+    return tok_fn(prefix), None
+
+
 def _build_node_sample_chat(
     target_node_text: str,
     neighbor_texts: list[str],
@@ -286,6 +450,7 @@ def _build_node_sample_chat(
     answer_tokens: list[int],
     max_answer_tokens: int,
     prompt_layout: str,
+    answer_labels: Optional[list[str]] = None,
     neighbor_labels: Optional[list[int]] = None,
     include_neighbor_labels: bool = False,
     neighbor_label_format: str = "bracket",
@@ -343,32 +508,45 @@ def _build_node_sample_chat(
 
     nb_token_list = []
     for i, (nb_text, hop) in enumerate(zip(neighbor_texts, neighbor_hops)):
-        nb_prefix = _tok(
-            _neighbor_prefix_str(
-                i,
-                neighbor_labels,
-                class_names,
-                include_neighbor_labels,
-                neighbor_label_format,
-            )
+        nb_prefix, nb_label_span_in_prefix = _neighbor_prefix_tokens_and_label_span(
+            idx=i,
+            neighbor_labels=neighbor_labels,
+            class_names=class_names,
+            answer_labels=answer_labels,
+            include_neighbor_labels=include_neighbor_labels,
+            neighbor_label_format=neighbor_label_format,
+            tok_fn=_tok,
         )
         nb_body = _tok(nb_text)
-        nb_ids = (nb_prefix + nb_body)[:per_nb_budget]
-        nb_token_list.append((nb_ids, hop))
+        nb_full = nb_prefix + nb_body
+        nb_ids = nb_full[:per_nb_budget]
+        if nb_label_span_in_prefix is not None:
+            ls, le = nb_label_span_in_prefix
+            if ls >= len(nb_ids):
+                nb_label_span_in_nb = None
+            else:
+                nb_label_span_in_nb = (ls, min(le, len(nb_ids)))
+        else:
+            nb_label_span_in_nb = None
+        nb_token_list.append((nb_ids, hop, nb_label_span_in_nb))
 
     # --- Assemble content tokens (inside user turn) based on layout ---
     if prompt_layout == "neighbor_first":
         content_toks = []
         nb_content_spans = []  # spans relative to content_toks start
+        nb_label_content_spans = []
         nb_hops = []
         max_nb_total = content_budget - target_content_len
 
-        for nb_ids, hop in nb_token_list:
+        for nb_ids, hop, nb_label_span in nb_token_list:
             if len(content_toks) + len(nb_ids) > max_nb_total:
                 break
             start = len(content_toks)
             content_toks.extend(nb_ids)
             nb_content_spans.append([start, len(content_toks)])
+            if nb_label_span is not None:
+                ls, le = nb_label_span
+                nb_label_content_spans.append((start + ls, start + le))
             nb_hops.append(hop)
 
         target_content_start = len(content_toks)
@@ -379,14 +557,18 @@ def _build_node_sample_chat(
         content_toks = list(target_content_toks)
         target_content_span = [0, target_content_len]
         nb_content_spans = []
+        nb_label_content_spans = []
         nb_hops = []
 
-        for nb_ids, hop in nb_token_list:
+        for nb_ids, hop, nb_label_span in nb_token_list:
             if len(content_toks) >= content_budget:
                 break
             start = len(content_toks)
             content_toks.extend(nb_ids)
             nb_content_spans.append([start, len(content_toks)])
+            if nb_label_span is not None:
+                ls, le = nb_label_span
+                nb_label_content_spans.append((start + ls, start + le))
             nb_hops.append(hop)
 
     # --- Now wrap content in chat template ---
@@ -436,6 +618,9 @@ def _build_node_sample_chat(
     for span, hop in zip(nb_content_spans, nb_hops):
         node_spans.append([span[0] + content_offset, span[1] + content_offset])
         node_hops_out.append(hop)
+    nb_label_abs_spans = [
+        (s + content_offset, e + content_offset) for s, e in nb_label_content_spans
+    ]
 
     # Enforce max_seq_len
     input_ids = input_ids[:max_seq_len]
@@ -464,6 +649,9 @@ def _build_node_sample_chat(
         pos = label_token_pos + j
         if pos < len(labels):
             labels[pos] = input_ids[pos]
+    for span_start, span_end in nb_label_abs_spans:
+        for pos in range(span_start, min(span_end, len(labels))):
+            labels[pos] = input_ids[pos]
 
     return {
         "input_ids": input_ids,
@@ -487,6 +675,7 @@ def _build_node_sample_category(
     mask_target_text: bool,
     max_answer_tokens: int,
     prompt_layout: str,
+    answer_labels: Optional[list[str]] = None,
     neighbor_labels: Optional[list[int]] = None,
     include_neighbor_labels: bool = False,
     neighbor_label_format: str = "bracket",
@@ -505,29 +694,42 @@ def _build_node_sample_category(
         The category of this paper is: <class_name>
 
     The class name tokens are the answer (masked during eval).
-    Short class names are padded to max_answer_tokens with eos_token_id so the
-    model learns an explicit "answer ends here" boundary; all answer positions
-    (real tokens + eos fill) are supervised and participate in diffusion noise.
+    We reserve a fixed answer window of ``max_answer_tokens`` for evaluation
+    compatibility, but only supervise the real class-name token span:
+      - real answer tokens: labels != -100
+      - remaining reserved slots: mask-token placeholders with labels == -100
     """
 
     def _tok(text: str) -> list[int]:
         return tokenizer.encode(text, add_special_tokens=False)
 
-    # --- Build answer tokens (class name, eos-padded to max_answer_tokens) ---
+    # --- Build answer tokens ---
+    # Keep a fixed reserved answer window for eval, but supervise only the
+    # real answer tokens in labels.
     class_name = class_names[cls_label]
     answer_tokens = _tok(class_name)[:max_answer_tokens]
-    eos_id = tokenizer.eos_token_id
-    assert eos_id is not None, "tokenizer must have eos_token_id for answer padding"
     answer_len = len(answer_tokens)
+    mask_id = tokenizer.mask_token_id
+    assert mask_id is not None, "tokenizer must have mask_token_id"
     while len(answer_tokens) < max_answer_tokens:
-        answer_tokens.append(eos_id)
+        answer_tokens.append(mask_id)
 
     # --- Tokenize target section ---
     target_prefix = _tok("Paper: ")
     target_body = _tok(target_node_text)
     if include_options:
-        options_str = " ".join(f"{i}) {name}" for i, name in enumerate(class_names))
-        options_suffix = _tok(f"\nOptions: {options_str}")
+        options_intro = _tok("\nOptions: ")
+        options_body = []
+        for i, name in enumerate(class_names):
+            option_label = (
+                str(i)
+                if answer_labels is None or i >= len(answer_labels)
+                else answer_labels[i]
+            )
+            option_prefix = _tok(f"{'' if i == 0 else ' '}{option_label}. ")
+            options_body.extend(option_prefix)
+            options_body.extend(_tok(name))
+        options_suffix = options_intro + options_body
     else:
         options_suffix = []
     category_suffix = _tok("\nThe category of this paper is: ")
@@ -553,7 +755,6 @@ def _build_node_sample_category(
         + len(options_suffix)
         + len(category_suffix)
     )
-
     # --- Tokenize neighbor sections ---
     num_neighbors = len(neighbor_texts)
     remaining_budget = max_seq_len - target_section_len
@@ -563,18 +764,27 @@ def _build_node_sample_category(
 
     nb_token_list = []
     for i, (nb_text, hop) in enumerate(zip(neighbor_texts, neighbor_hops)):
-        nb_prefix = _tok(
-            _neighbor_prefix_str(
-                i,
-                neighbor_labels,
-                class_names,
-                include_neighbor_labels,
-                neighbor_label_format,
-            )
+        nb_prefix, nb_label_span_in_prefix = _neighbor_prefix_tokens_and_label_span(
+            idx=i,
+            neighbor_labels=neighbor_labels,
+            class_names=class_names,
+            answer_labels=answer_labels,
+            include_neighbor_labels=include_neighbor_labels,
+            neighbor_label_format=neighbor_label_format,
+            tok_fn=_tok,
         )
         nb_body = _tok(nb_text)
-        nb_ids = (nb_prefix + nb_body)[:per_nb_budget]
-        nb_token_list.append((nb_ids, hop))
+        nb_full = nb_prefix + nb_body
+        nb_ids = nb_full[:per_nb_budget]
+        if nb_label_span_in_prefix is not None:
+            ls, le = nb_label_span_in_prefix
+            if ls >= len(nb_ids):
+                nb_label_span_in_nb = None
+            else:
+                nb_label_span_in_nb = (ls, min(le, len(nb_ids)))
+        else:
+            nb_label_span_in_nb = None
+        nb_token_list.append((nb_ids, hop, nb_label_span_in_nb))
 
     # --- Assemble based on layout ---
     # For category_infill, answer is always at the end of target section.
@@ -583,15 +793,19 @@ def _build_node_sample_category(
     if prompt_layout == "neighbor_first":
         input_ids = []
         nb_spans = []
+        nb_label_spans_abs = []
         nb_hops = []
         max_nb_total = max_seq_len - target_section_len
 
-        for nb_ids, hop in nb_token_list:
+        for nb_ids, hop, nb_label_span in nb_token_list:
             if len(input_ids) + len(nb_ids) > max_nb_total:
                 break
             start = len(input_ids)
             input_ids.extend(nb_ids)
             nb_spans.append([start, len(input_ids)])
+            if nb_label_span is not None:
+                ls, le = nb_label_span
+                nb_label_spans_abs.append((start + ls, start + le))
             nb_hops.append(hop)
 
         target_start = len(input_ids)
@@ -606,13 +820,17 @@ def _build_node_sample_category(
         label_token_pos = answer_offset_in_target
         node_spans = [[0, target_section_len]]
         node_hops_out = [0]
+        nb_label_spans_abs = []
 
-        for nb_ids, hop in nb_token_list:
+        for nb_ids, hop, nb_label_span in nb_token_list:
             if len(input_ids) >= max_seq_len:
                 break
             start = len(input_ids)
             input_ids.extend(nb_ids)
             node_spans.append([start, len(input_ids)])
+            if nb_label_span is not None:
+                ls, le = nb_label_span
+                nb_label_spans_abs.append((start + ls, start + le))
             node_hops_out.append(hop)
 
     # Enforce max_seq_len
@@ -629,14 +847,15 @@ def _build_node_sample_category(
             tb_end = len(target_prefix) + len(target_body)
         for pos in range(tb_start, min(tb_end, len(labels))):
             labels[pos] = input_ids[pos]
-    # Answer tokens in labels: supervise the full max_answer_tokens span,
-    # including eos-fill positions, so the model learns to terminate short
-    # class names with eos rather than relying on an externally-known length.
-    for j in range(max_answer_tokens):
+    # Answer tokens in labels: supervise only real class-name tokens.
+    # Reserved tail slots remain -100 (not trained).
+    for j in range(answer_len):
         pos = label_token_pos + j
         if pos < len(labels):
             labels[pos] = input_ids[pos]
-
+    for span_start, span_end in nb_label_spans_abs:
+        for pos in range(span_start, min(span_end, len(labels))):
+            labels[pos] = input_ids[pos]
     return {
         "input_ids": input_ids,
         "labels": labels,
@@ -662,6 +881,7 @@ def build_node_sample(
     prompt_layout: str = "target_first",
     use_chat_template: bool = False,
     prompt_format: str = "mc_digit",
+    answer_label_style: str = "digit0",
     neighbor_labels: Optional[list[int]] = None,
     include_neighbor_labels: bool = False,
     neighbor_label_format: str = "bracket",
@@ -701,6 +921,7 @@ def build_node_sample(
             mask_target_text=mask_target_text,
             max_answer_tokens=max_answer_tokens,
             prompt_layout=prompt_layout,
+            answer_labels=answer_labels,
             neighbor_labels=neighbor_labels,
             include_neighbor_labels=include_neighbor_labels,
             neighbor_label_format=neighbor_label_format,
@@ -714,7 +935,10 @@ def build_node_sample(
 
     # --- Build options string ---
     if answer_labels is None:
-        answer_labels = get_answer_labels(len(class_names))
+        answer_labels = get_answer_labels(
+            len(class_names),
+            style=answer_label_style,
+        )
     options_str = " ".join(
         f"{answer_labels[i]}) {name}" for i, name in enumerate(class_names)
     )
@@ -737,6 +961,7 @@ def build_node_sample(
             answer_tokens=answer_tokens,
             max_answer_tokens=max_answer_tokens,
             prompt_layout=prompt_layout,
+            answer_labels=answer_labels,
             neighbor_labels=neighbor_labels,
             include_neighbor_labels=include_neighbor_labels,
             neighbor_label_format=neighbor_label_format,
@@ -745,7 +970,19 @@ def build_node_sample(
     # --- Tokenize target section ---
     target_prefix = _tok("Paper: ")
     target_body = _tok(target_node_text)
-    options_prefix = _tok(f"\nOptions: {options_str}\nAnswer: ")
+    options_intro = _tok("\nOptions: ")
+    options_body = []
+    class_spans_in_options = []
+    for i, name in enumerate(class_names):
+        opt_prefix = _tok(f"{'' if i == 0 else ' '}{answer_labels[i]}) ")
+        class_start = len(options_body) + len(opt_prefix)
+        class_name_tokens = _tok(name)
+        options_body.extend(opt_prefix)
+        options_body.extend(class_name_tokens)
+        class_end = len(options_body)
+        class_spans_in_options.append((class_start, class_end))
+    options_suffix = _tok("\nAnswer: ")
+    options_prefix = options_intro + options_body + options_suffix
 
     # Reserve space: target gets up to half of max_seq_len
     overhead = len(target_prefix) + len(options_prefix) + len(answer_tokens)
@@ -758,6 +995,21 @@ def build_node_sample(
     answer_offset_in_target = (
         len(target_prefix) + len(target_body) + len(options_prefix)
     )
+    # Supervise both:
+    # 1) the answer digit token(s) after "Answer:"
+    # 2) the class-name token span in the options list for the gold class.
+    class_start_in_target = (
+        len(target_prefix)
+        + len(target_body)
+        + len(options_intro)
+        + class_spans_in_options[cls_label][0]
+    )
+    class_end_in_target = (
+        len(target_prefix)
+        + len(target_body)
+        + len(options_intro)
+        + class_spans_in_options[cls_label][1]
+    )
 
     # --- Tokenize neighbor sections ---
     num_neighbors = len(neighbor_texts)
@@ -768,32 +1020,45 @@ def build_node_sample(
 
     nb_token_list = []
     for i, (nb_text, hop) in enumerate(zip(neighbor_texts, neighbor_hops)):
-        nb_prefix = _tok(
-            _neighbor_prefix_str(
-                i,
-                neighbor_labels,
-                class_names,
-                include_neighbor_labels,
-                neighbor_label_format,
-            )
+        nb_prefix, nb_label_span_in_prefix = _neighbor_prefix_tokens_and_label_span(
+            idx=i,
+            neighbor_labels=neighbor_labels,
+            class_names=class_names,
+            answer_labels=answer_labels,
+            include_neighbor_labels=include_neighbor_labels,
+            neighbor_label_format=neighbor_label_format,
+            tok_fn=_tok,
         )
         nb_body = _tok(nb_text)
-        nb_ids = (nb_prefix + nb_body)[:per_nb_budget]
-        nb_token_list.append((nb_ids, hop))
+        nb_full = nb_prefix + nb_body
+        nb_ids = nb_full[:per_nb_budget]
+        if nb_label_span_in_prefix is not None:
+            ls, le = nb_label_span_in_prefix
+            if ls >= len(nb_ids):
+                nb_label_span_in_nb = None
+            else:
+                nb_label_span_in_nb = (ls, min(le, len(nb_ids)))
+        else:
+            nb_label_span_in_nb = None
+        nb_token_list.append((nb_ids, hop, nb_label_span_in_nb))
 
     # --- Assemble based on layout ---
     if prompt_layout == "neighbor_first":
         input_ids = []
         nb_spans = []
+        nb_label_spans_abs = []
         nb_hops = []
         max_nb_total = max_seq_len - target_section_len
 
-        for nb_ids, hop in nb_token_list:
+        for nb_ids, hop, nb_label_span in nb_token_list:
             if len(input_ids) + len(nb_ids) > max_nb_total:
                 break
             start = len(input_ids)
             input_ids.extend(nb_ids)
             nb_spans.append([start, len(input_ids)])
+            if nb_label_span is not None:
+                ls, le = nb_label_span
+                nb_label_spans_abs.append((start + ls, start + le))
             nb_hops.append(hop)
 
         # Append target section after neighbors
@@ -810,13 +1075,17 @@ def build_node_sample(
         label_token_pos = answer_offset_in_target
         node_spans = [[0, target_section_len]]
         node_hops_out = [0]
+        nb_label_spans_abs = []
 
-        for nb_ids, hop in nb_token_list:
+        for nb_ids, hop, nb_label_span in nb_token_list:
             if len(input_ids) >= max_seq_len:
                 break
             start = len(input_ids)
             input_ids.extend(nb_ids)
             node_spans.append([start, len(input_ids)])
+            if nb_label_span is not None:
+                ls, le = nb_label_span
+                nb_label_spans_abs.append((start + ls, start + le))
             node_hops_out.append(hop)
 
     # Enforce max_seq_len
@@ -837,6 +1106,18 @@ def build_node_sample(
     for j in range(len(answer_tokens)):
         pos = label_token_pos + j
         if pos < len(labels):
+            labels[pos] = input_ids[pos]
+    # Also supervise the gold category name tokens in the options block.
+    if prompt_layout == "neighbor_first":
+        class_start_abs = target_start + class_start_in_target
+        class_end_abs = target_start + class_end_in_target
+    else:
+        class_start_abs = class_start_in_target
+        class_end_abs = class_end_in_target
+    for pos in range(class_start_abs, min(class_end_abs, len(labels))):
+        labels[pos] = input_ids[pos]
+    for span_start, span_end in nb_label_spans_abs:
+        for pos in range(span_start, min(span_end, len(labels))):
             labels[pos] = input_ids[pos]
 
     return {
@@ -865,12 +1146,16 @@ def _build_tag_samples(
     prompt_layout: str,
     use_chat_template: bool = False,
     prompt_format: str = "mc_digit",
+    answer_label_style: str = "digit0",
     include_neighbor_labels: bool = False,
     neighbor_label_format: str = "bracket",
     include_options: bool = True,
 ) -> list[dict]:
     """Build TM-DLM samples for a list of node IDs (shared across all datasets)."""
-    answer_labels = get_answer_labels(len(class_names))
+    answer_labels = get_answer_labels(
+        len(class_names),
+        style=answer_label_style,
+    )
     rng = random.Random(seed)
     samples = []
 
@@ -909,6 +1194,7 @@ def _build_tag_samples(
             prompt_layout=prompt_layout,
             use_chat_template=use_chat_template,
             prompt_format=prompt_format,
+            answer_label_style=answer_label_style,
             neighbor_labels=neighbor_labels,
             include_neighbor_labels=include_neighbor_labels,
             neighbor_label_format=neighbor_label_format,
@@ -930,6 +1216,10 @@ def _load_cora_data(
     seed: int,
 ) -> tuple[dict, dict, list[str], list[int]]:
     """Load Cora data from HuggingFace TAPE + PyG Planetoid."""
+    llaga_loaded = _load_llaga_processed_data(config, split)
+    if llaga_loaded is not None:
+        return llaga_loaded
+
     split_map = {"train": "train", "val": "validation", "test": "test"}
     hf_split = split_map[split]
 
@@ -969,6 +1259,10 @@ def _load_pubmed_data(
     seed: int,
 ) -> tuple[dict, dict, list[str], list[int]]:
     """Load PubMed data from local TAPE files (tab + JSON + citations)."""
+    llaga_loaded = _load_llaga_processed_data(config, split)
+    if llaga_loaded is not None:
+        return llaga_loaded
+
     import json as _json
 
     tape_dir = Path(config["tape_dir"])
@@ -1064,6 +1358,10 @@ def _load_ogbn_arxiv_data(
     seed: int,
 ) -> tuple[dict, dict, list[str], list[int]]:
     """Load ogbn-arxiv data from OGB files + titleabs.tsv."""
+    llaga_loaded = _load_llaga_processed_data(config, split)
+    if llaga_loaded is not None:
+        return llaga_loaded
+
     import gzip
     import csv
 
@@ -1257,6 +1555,7 @@ def load_tag_dataset(
     prompt_layout: str = "target_first",
     use_chat_template: bool = False,
     prompt_format: str = "mc_digit",
+    answer_label_style: str = "digit0",
     include_neighbor_labels: bool = False,
     neighbor_label_format: str = "bracket",
     include_options: bool = True,
@@ -1290,6 +1589,7 @@ def load_tag_dataset(
         prompt_layout,
         use_chat_template,
         prompt_format,
+        answer_label_style,
         include_neighbor_labels=include_neighbor_labels,
         neighbor_label_format=neighbor_label_format,
         include_options=include_options,
@@ -1307,6 +1607,7 @@ def get_class_token_ids(
     tokenizer,
     max_answer_tokens: int = 1,
     prompt_format: str = "mc_digit",
+    answer_label_style: str = "digit0",
 ) -> tuple[list[str], list]:
     """
     Get the answer token IDs for classification.
@@ -1327,7 +1628,10 @@ def get_class_token_ids(
     config = DATASET_CONFIGS[dataset_name]
     num_classes = config["num_classes"]
 
-    if "class_names" in config:
+    llaga_loaded = _load_llaga_processed_data(config, "train")
+    if llaga_loaded is not None:
+        _, _, class_names, _ = llaga_loaded
+    elif "class_names" in config:
         class_names = config["class_names"]
     else:
         tape_ds = load_dataset(
@@ -1355,7 +1659,10 @@ def get_class_token_ids(
         return class_names, answer_token_ids
 
     # --- mc_digit format ---
-    answer_labels = get_answer_labels(num_classes)
+    answer_labels = get_answer_labels(
+        num_classes,
+        style=answer_label_style,
+    )
 
     if max_answer_tokens == 1:
         answer_token_ids = []
