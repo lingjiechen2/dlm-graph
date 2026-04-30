@@ -1,0 +1,8 @@
+{
+  "_comment": "PubMed node classification baselines (accuracy %). Sources: LLaGA paper (Chen et al. 2024), GraphSAGE (Hamilton et al. 2017), GCN (Kipf & Welling 2017), GAT (Velickovic et al. 2018).",
+  "LLaGA-HO-7B": 95.03,
+  "GraphSAGE": 94.87,
+  "GCN": 92.96,
+  "GAT": 92.33,
+  "LLaDA-8B (frozen, logit)": 87.15
+}

@@ -1,0 +1,8 @@
+{
+  "_comment": "Cora node classification baselines (accuracy %). Sources: LLaGA paper (Chen et al. 2024), SAGN (Sun et al. 2021), GCN (Kipf & Welling 2017), RoBERTa (Liu et al. 2019).",
+  "LLaGA-HO-7B": 89.22,
+  "SAGN": 89.19,
+  "GCN": 88.93,
+  "RoBERTa-355M": 83.17,
+  "LLaDA-8B (frozen, logit)": 57.01
+}

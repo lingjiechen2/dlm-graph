@@ -1,0 +1,60 @@
+{
+  "_comment": "Shared visual style for all SFT lineplot scripts. Edit here to align all figures at once.",
+
+  "figure": {
+    "figsize": [7, 4.5],
+    "dpi": 220
+  },
+
+  "font": {
+    "usetex": true,
+    "latex_preamble": "\\RequirePackage{tgpagella}",
+    "family": "serif",
+    "_note": "tgpagella via TeX Live 2025; usetex=true verified working on this machine"
+  },
+
+  "title": {
+    "fontsize": 13,
+    "pad": 10
+  },
+
+  "axes": {
+    "label_fontsize": 11,
+    "tick_labelsize": 9,
+    "spines_top": false,
+    "spines_right": false
+  },
+
+  "grid": {
+    "axis": "y",
+    "linestyle": "--",
+    "alpha": 0.3
+  },
+
+  "series": {
+    "linewidth": 2.0,
+    "markersize": 5,
+    "endpoint_label_fontsize": 8,
+    "palette": {
+      "logit_notopo":  { "color": "#2166AC", "linestyle": "-",  "marker": "o", "label": "Logit · no-topo" },
+      "logit_topo":    { "color": "#2166AC", "linestyle": "--", "marker": "s", "label": "Logit · topo" },
+      "infill_notopo": { "color": "#D55E00", "linestyle": "-",  "marker": "o", "label": "Infill · no-topo" },
+      "infill_topo":   { "color": "#D55E00", "linestyle": "--", "marker": "s", "label": "Infill · topo" }
+    }
+  },
+
+  "baseline": {
+    "linestyle": ":",
+    "linewidth": 1.4,
+    "alpha": 0.9,
+    "label_fontsize": 7.5,
+    "min_label_gap": 0.3,
+    "colors": ["#4d4d4d", "#777777", "#999999", "#bbbbbb", "#dddddd"]
+  },
+
+  "legend": {
+    "frameon": false,
+    "fontsize": 9,
+    "loc": "lower right"
+  }
+}
