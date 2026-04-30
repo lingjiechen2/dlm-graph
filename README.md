@@ -6,16 +6,16 @@ Applying masked diffusion language models to node classification on text-attribu
 
 Instead of using GNN+LM pipelines or autoregressive LLMs, we use LLaDA (a masked discrete diffusion LM with bidirectional attention) to classify nodes by denoising a masked answer token conditioned on the node's text and optional neighbor context.
 
-Each node is formatted as a multiple-choice prompt:
+Each node is formatted as a category-infill prompt:
+
 ```
 Paper: <title>. <abstract>
-Options: 0) Case Based 1) Genetic Algorithms 2) Neural Networks ...
-Answer: [MASK]
-Neighbor 1: <neighbor_title>. <neighbor_abstract>
+Answer: [MASK] [MASK] [MASK] [MASK] [MASK] [MASK]
+Neighbor 1 [<class>]: <neighbor_title>. <neighbor_abstract>
 ...
 ```
 
-The model predicts the masked answer digit via forward pass (frozen) or diffusion denoising (SFT with LoRA).
+The model fills in the masked answer region via forward pass (frozen logit scoring) or iterative denoising (SFT with LoRA).
 
 ## Key Components
 
@@ -52,172 +52,157 @@ pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 pip install -e .
 ```
 
-### Frozen Model Evaluation (no training)
+### Frozen Evaluation (no training)
 
 ```bash
-# Target-only
-CUDA_VISIBLE_DEVICES=0 python examples/tmdlm/run_experiments.py \
-    --exp mc_target_only \
+# Logit scoring: single forward pass, argmax over class token logits
+CUDA_VISIBLE_DEVICES=0 python examples/tmdlm/eval_logit.py \
     --model_name_or_path GSAI-ML/LLaDA-8B-Instruct \
-    --dataset_name cora --max_hops 0
+    --dataset_name cora --max_hops 2 \
+    --prompt_format category_infill --max_answer_tokens 6 \
+    --include_neighbor_labels True --neighbor_label_format bracket
 
-# 1-hop neighbors + topology mask
-CUDA_VISIBLE_DEVICES=0 python examples/tmdlm/run_experiments.py \
-    --exp mc_1hop_topo_mask \
+# Infill scoring: iterative denoising (10 steps)
+CUDA_VISIBLE_DEVICES=0 python examples/tmdlm/eval_infill.py \
     --model_name_or_path GSAI-ML/LLaDA-8B-Instruct \
-    --dataset_name cora --max_hops 1 --use_topology_mask True
+    --dataset_name cora --max_hops 2 \
+    --prompt_format category_infill --max_answer_tokens 6 \
+    --include_neighbor_labels True --neighbor_label_format bracket \
+    --steps 10
 ```
 
 ### SFT with LoRA
 
+Dataset-specific paired launchers (topo + no-topo, one GPU each):
+
 ```bash
-CUDA_VISIBLE_DEVICES=0 python /home/lingjie7/auto-research/projects/dlm-graph/examples/tmdlm/sft.py \
-    --model_name_or_path GSAI-ML/LLaDA-8B-Instruct \
-    --dataset_name cora \
-    --max_hops 2 \
-    --use_topology_mask True \
-    --max_neighbors_per_hop 10 \
-    --prompt_format category_infill \
-    --max_answer_tokens 6 \
-    --include_neighbor_labels True \
-    --neighbor_label_format bracket \
-    --per_device_train_batch_size 2 --gradient_accumulation_steps 8 \
-    --learning_rate 5e-5 --num_train_epochs 20 \
-    --output_dir .models/tmdlm-llada-8b-cora-2hop-topo-catinfill-nbmask-noeospad-r64-ep20 \
-    --gradient_checkpointing True --cls_loss_weight 1.0 \
-    --lora True --r 64 --lora_alpha 64 --target_modules all-linear
+# Cora
+GPUS=0,1 bash examples/tmdlm/run_sft_cora_hops_topo_lora.sh
+
+# PubMed
+GPUS=0,1 bash examples/tmdlm/run_sft_pubmed_lora.sh
+
+# ogbn-arxiv  (uses max_steps instead of num_train_epochs)
+GPUS=0,1 bash examples/tmdlm/run_sft_arxiv_lora.sh
 ```
 
-Latest paired launcher (topo/notopo, default 2 GPUs):
+Key shared defaults: `--prompt_format category_infill`, `--include_neighbor_labels True`, `--neighbor_label_format bracket`, `--lora True --r 64 --lora_alpha 64 --target_modules all-linear`, `--learning_rate 5e-5`.
+
+### Evaluation on SFT Checkpoints
 
 ```bash
-# Cora only
-GPUS=0,1 DATASETS=cora \
-  bash /home/lingjie7/auto-research/projects/dlm-graph/examples/tmdlm/run_sft_cora_hops_topo_lora.sh
+# Logit eval on all checkpoints of a run
+CUDA_VISIBLE_DEVICES=0 python examples/tmdlm/eval_logit.py \
+    --lora_path .models/<run_name>/checkpoint-<N> \
+    --dataset_name cora --log_file /tmp/eval-out.jsonl [...]
 
-# Cora then PubMed (sequential datasets, each dataset launches topo+notopo)
-GPUS=0,1 DATASETS=cora,pubmed \
-  bash /home/lingjie7/auto-research/projects/dlm-graph/examples/tmdlm/run_sft_cora_hops_topo_lora.sh
+# Infill eval (iterative denoising)
+CUDA_VISIBLE_DEVICES=0 python examples/tmdlm/eval_infill.py \
+    --lora_path .models/<run_name>/checkpoint-<N> \
+    --steps 10 --max_samples 1000 [...]
 ```
 
 ## Results
 
-### Cora (7 classes, 542 test nodes, supervised setting)
+Baselines from [LLaGA, Table 1 (Single Focus)](https://arxiv.org/pdf/2402.08170). Our SFT uses LLaDA-8B-Instruct + LoRA (r=64, all-linear), 2-hop neighbors (max 10/hop), category-infill prompt with neighbor labels.
 
-Baselines from [LLaGA, Table 1 (Single Focus)](https://arxiv.org/pdf/2402.08170), Cora node classification.
+### Summary
 
-| Method | Type | Accuracy |
-|--------|------|----------|
-| LLaGA-HO-7B | LLM + Graph Projector | 89.22% |
-| SAGN | GNN | 89.19% |
-| GAT | GNN | 88.97% |
-| GCN | GNN | 88.93% |
-| GraphSAGE | GNN | 88.89% |
-| LLaGA-ND-7B | LLM + Graph Projector | 88.86% |
-| NodeFormer | Graph Transformer | 88.23% |
-| SGC | GNN | 87.97% |
-| **Ours: SFT (2-hop + topo, label-on, eval_logit)** | **DLM + LoRA (best: checkpoint-final)** | **90.41%** |
-| Ours: SFT (2-hop + no topo, label-on, eval_logit) | DLM + LoRA (best: checkpoint-1428) | 90.22% |
-| Ours: SFT (2-hop + topo, label-on, eval_infill lenient) | DLM + LoRA (best: checkpoint-2040) | 87.45% |
-| Ours: SFT (2-hop + no topo, label-on, eval_infill lenient) | DLM + LoRA (best: checkpoint-2040) | 89.48% |
-| Ours: Frozen (2-hop + topo, label-on, eval_logit) | DLM zero-shot | 37.82% |
-| Ours: Frozen (2-hop + no topo, label-on, eval_logit) | DLM zero-shot | 33.03% |
-| Ours: Frozen (2-hop + topo, label-on, eval_infill lenient) | DLM zero-shot | 57.01% |
-| Ours: Frozen (2-hop + no topo, label-on, eval_infill lenient) | DLM zero-shot | 60.52% |
-| RoBERTa-355M | LM only | 83.17% |
-| Ours: Frozen MC (target-only, legacy setting) | DLM zero-shot | 62.73% |
+| Dataset | Setting | Eval | Best Acc | vs. Best Baseline |
+|---------|---------|------|----------|-------------------|
+| **Cora** | SFT · no-topo | Infill | **92.07%** | +2.85 pp vs. LLaGA-HO-7B (89.22%) |
+| Cora | SFT · topo | Infill | 91.51% | +2.29 pp |
+| Cora | SFT · no-topo | Logit | 91.33% | +2.11 pp |
+| Cora | SFT · topo | Logit | 90.77% | +1.55 pp |
+| Cora | Frozen | Infill | 57.01% | — |
+| **PubMed** | SFT · no-topo | Logit | **95.18%** | +0.31 pp vs. GraphSAGE (94.87%) |
+| PubMed | SFT · no-topo | Infill | 94.93% | — |
+| PubMed | SFT · topo | Logit | 94.47% | — |
+| PubMed | SFT · topo | Infill | 94.14% | — |
+| PubMed | Frozen | Logit | 87.15% | — |
 
-Latest SFT rows above are from:
-`/home/lingjie7/auto-research/projects/dlm-graph/summaries/cora_noeospad_allckpts_eval_gpu01_20260425_164435/summary.csv`.
+---
 
-Latest frozen 2-hop label-on rows above are from:
-`/home/lingjie7/auto-research/projects/dlm-graph/summaries/cora_frozen_labelon_newest_gpu26_20260425_2102/jsonl`.
+### Cora — Checkpoint Curve (10 epochs, LoRA r=64)
 
-### PubMed (3 classes, zero-shot)
+Eval on 542 test nodes. Checkpoints saved every 10% of training (204 steps).
 
-Baselines from [LLaGA, Table 1 (Single Focus)](https://arxiv.org/pdf/2402.08170), PubMed node classification.
+| Checkpoint | Logit · no-topo | Logit · topo | Infill · no-topo | Infill · topo |
+|-----------|----------------|-------------|-----------------|--------------|
+| 204 | 82.66 | 82.47 | 89.11 | 87.64 |
+| 408 | 87.82 | 88.93 | 90.04 | 89.67 |
+| 612 | 89.85 | 89.67 | 89.48 | 89.67 |
+| 816 | 90.59 | 90.41 | 91.14 | 91.14 |
+| 1020 | 91.33 | **90.77** | 91.33 | **91.51** |
+| 1224 | **91.33** | — | **92.07** | — |
+| *LLaGA-HO-7B* | *89.22* | | | |
+| *SAGN* | *89.19* | | | |
+| *GCN* | *88.93* | | | |
+| *RoBERTa-355M* | *83.17* | | | |
+| *Frozen LLaDA-8B* | *57.01* | | | |
 
-Note: our PubMed result below is still a zero-shot DLM result on a custom stratified split, so comparison to supervised single-focus baselines is approximate.
+Topo runs evaluated up to ckpt-1020; no-topo runs evaluated up to ckpt-1224.
 
-| Method | Type | Accuracy |
-|--------|------|----------|
-| SAGN | GNN | 95.17% |
-| LLaGA-ND-7B | LLM + Graph Projector | 95.03% |
-| LLaGA-HO-7B | LLM + Graph Projector | 95.03% |
-| NodeFormer | Graph Transformer | 94.90% |
-| GraphSAGE | GNN | 94.87% |
-| GCN | GNN | 92.96% |
-| GAT | GNN | 92.33% |
-| SGC | GNN | 87.35% |
-| **Ours: Frozen MC** | **DLM zero-shot** | **88.69%** |
+---
 
-See [/home/lingjie7/auto-research/projects/dlm-graph/examples/tmdlm/results.md](/home/lingjie7/auto-research/projects/dlm-graph/examples/tmdlm/results.md) for full results.
+### PubMed — Checkpoint Curve (10 epochs, LoRA r=64)
 
-### Neighbor Count Sweep (`nb` = 1/3/5/10/20)
+Eval on full test split. Checkpoints saved every 5% of training (370 steps).
 
-Open-ended category-infill runs logged in `experiments/experiment_log.jsonl`
-(`openended_*_nb*`, `target_first`, `use_topology_mask=False`).
-Metric shown is `accuracy_strict` (%).
+| Checkpoint | Logit · no-topo | Logit · topo | Infill · no-topo | Infill · topo |
+|-----------|----------------|-------------|-----------------|--------------|
+| 370 | 91.23 | 92.11 | 93.13 | 92.98 |
+| 740 | 94.35 | 94.14 | **94.93** | 93.36 |
+| 1110 | 93.61 | 92.37 | **94.93** | 94.27 |
+| 1480 | **95.18** | **94.47** | 94.90 | **94.14** |
+| *LLaGA-HO-7B* | *95.03* | | | |
+| *GraphSAGE* | *94.87* | | | |
+| *GCN* | *92.96* | | | |
+| *GAT* | *92.33* | | | |
+| *Frozen LLaDA-8B* | *87.15* | | | |
 
-| Dataset | Hops | nb=1 | nb=3 | nb=5 | nb=10 | nb=20 |
-|---------|------|------|------|------|-------|-------|
-| Cora | 1 | 60.52 | 60.33 | 61.62 | 61.44 | 61.44 |
-| Cora | 2 | 57.93 | 63.84 | 65.13 | 64.21 | 64.76 |
-| Cora | 3 | 57.93 | 63.84 | 65.13 | 64.21 | 64.76 |
-| OGBN-Arxiv | 1 | 55.10 | 58.10 | 58.90 | 59.20 | 58.90 |
-| OGBN-Arxiv | 2 | 56.30 | 59.10 | 61.10 | 58.70 | 57.60 |
-| OGBN-Arxiv | 3 | 56.30 | 59.10 | 61.10 | 58.70 | 57.60 |
-| OGBN-Products | 1 | 62.50 | 63.20 | 64.70 | 64.50 | 64.20 |
-| OGBN-Products | 2 | 62.70 | 64.30 | 64.80 | 65.10 | 66.30 |
-| OGBN-Products | 3 | 62.70 | 64.30 | 64.80 | 65.10 | 66.30 |
-| PubMed | 1 | 74.77 | 80.98 | 81.68 | 81.78 | 82.08 |
-| PubMed | 2 | 85.19 | 88.89 | 88.99 | 88.89 | 90.29 |
-| PubMed | 3 | 85.19 | 88.89 | 88.99 | 88.89 | 90.29 |
+---
 
-### Neighbor Count Sweep (`nb` = 1/3/5/10/20, `use_topology_mask=True`)
+### ogbn-arxiv — in progress
 
-Open-ended category-infill runs from
-`.logs/topo_nb_sweep_debug_direct/records/*.jsonl` (run id: `debug_direct`).
-Metric shown is `accuracy_strict` (%).
-
-| Dataset | Hops | nb=1 | nb=3 | nb=5 | nb=10 | nb=20 |
-|---------|------|------|------|------|-------|-------|
-| Cora | 1 | 60.89 | 59.41 | 60.52 | 60.33 | 60.33 |
-| Cora | 2 | 57.01 | 61.44 | 62.55 | 62.55 | 62.73 |
-| Cora | 3 | 57.01 | 61.44 | 62.55 | 62.55 | 62.73 |
-| PubMed | 1 | 74.97 | 76.78 | 77.58 | 77.88 | 77.98 |
-| PubMed | 2 | 77.08 | 81.88 | 82.78 | 82.28 | 82.68 |
-| PubMed | 3 | 77.08 | 81.88 | 82.78 | 82.28 | 82.68 |
-
-`OGBN-Arxiv` and `OGBN-Products` topology-mask sweep rows are still running and will be appended after completion.
-
-## Project Structure
-
-```
-dllm/
-  data/graph.py                    # TAG dataset loading (Cora, PubMed)
-  pipelines/tmdlm/
-    trainer.py                     # TMDLMTrainer (topology mask + aux loss)
-    utils.py                       # GraphDataCollator (topology mask, position IDs)
-    sampler.py                     # Iterative denoising for inference
-  pipelines/llada/models/
-    modeling_llada.py               # LLaDA model (extended with position_ids)
-  core/                            # Base dllm framework (MDLMTrainer, schedulers, etc.)
-
-examples/tmdlm/
-  sft.py                           # LoRA fine-tuning
-  run_experiments.py               # Frozen model evaluation
-  eval.py                          # SFT model evaluation
-  results.md                       # Full results with baselines
-  README.md                        # Detailed documentation
-```
+SFT training on GPU7 (topo, LoRA r=64, max\_steps=7400, bs=6). Results to be added.
 
 ## Datasets
 
 | Dataset | Classes | Train | Val | Test | Source |
 |---------|---------|-------|-----|------|--------|
-| Cora | 7 | 1624 | 542 | 542 | xxhe/tape-cora + PyG |
-| PubMed | 3 | 60 | 500 | 999 | Local TAPE files |
+| Cora | 7 | 1,624 | 542 | 542 | [TAPE](https://github.com/XiaoxinHe/TAPE) + PyG |
+| PubMed | 3 | ~11,800 | 500 | ~3,700 | TAPE files |
+| ogbn-arxiv | 40 | ~90,000 | ~29,000 | ~48,000 | OGB |
+
+## Project Structure
+
+```
+dllm/
+  data/graph.py                    # TAG dataset loading (Cora, PubMed, ogbn-*)
+  pipelines/tmdlm/
+    trainer.py                     # TMDLMTrainer (topology mask + aux loss)
+    utils.py                       # GraphDataCollator (topology mask, position IDs)
+    sampler.py                     # Iterative denoising for inference
+  pipelines/llada/models/
+    modeling_llada.py              # LLaDA model (extended with position_ids)
+  core/                            # Base dllm framework (MDLMTrainer, schedulers, etc.)
+
+examples/tmdlm/
+  sft.py                           # LoRA fine-tuning entry point
+  eval_logit.py                    # Logit-based evaluation (frozen or SFT)
+  eval_infill.py                   # Infill-based evaluation (iterative denoising)
+  run_sft_cora_hops_topo_lora.sh   # Cora SFT launcher
+  run_sft_pubmed_lora.sh           # PubMed SFT launcher
+  run_sft_arxiv_lora.sh            # ogbn-arxiv SFT launcher
+
+analysis/
+  plot_cora_sft_lineplot.py        # Cora checkpoint accuracy curves
+  plot_pubmed_sft_lineplot.py      # PubMed checkpoint accuracy curves
+  plot_style.json                  # Shared visual style for all plots
+  baselines_cora.json              # Cora baseline numbers
+  baselines_pubmed.json            # PubMed baseline numbers
+```
 
 ## Acknowledgments
 

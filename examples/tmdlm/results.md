@@ -102,3 +102,52 @@ Baseline source: [LLaGA, Table 1 (Single Focus)](https://arxiv.org/pdf/2402.0817
 | 1-hop topo mask | 62.2%           | 89.2%     | 97.6%     | 82.98%  |
 
 
+---
+
+## PubMed — SFT nonb (mc_digit, include_neighbor_labels=False)
+
+**Setting**: LoRA r=64 all-linear, 10 epochs, lr=5e-5, effective batch=16, 2-hop, max_neighbors=10.
+`include_neighbor_labels=False` at **both train and eval** — no oracle neighbor class names, fair comparison vs LLaGA.
+Run tag: `pubmed_20260428_mcdigit_nonb`. Test set 999 samples (333/class).
+
+### Logit Eval (direct token scoring)
+
+| Checkpoint | notopo accuracy | topo accuracy |
+| ---------- | --------------- | ------------- |
+| 370        | 99.8%           | 100.0%        |
+| 740        | 100.0%          | 100.0%        |
+| 1110       | 100.0%          | 100.0%        |
+| 1480       | 100.0%          | 100.0%        |
+
+**Note**: Logit eval saturates at 100% early. PubMed paper abstracts are highly class-discriminative on their own (DM Experimental / Type 1 / Type 2 have distinct vocabulary), so fine-tuned LLaDA-8B reaches ceiling without graph structure. This makes PubMed mc_digit a weak benchmark for measuring graph reasoning contribution.
+
+### Infill Eval (masked diffusion generation, 10 steps, temperature=0)
+
+| Checkpoint | notopo (strict) | topo (strict) |
+| ---------- | --------------- | ------------- |
+| 370        | 90.4%           | 92.6%         |
+| 740        | 93.3%           | 91.7%         |
+| 1110       | 91.9%           | 91.8%         |
+| **1480**   | **93.8%**       | **94.2%**     |
+
+### Per-Class Accuracy — Infill, checkpoint-1480
+
+| Setting | DM Experimental | DM Type 1 | DM Type 2 | Overall |
+| ------- | --------------- | --------- | --------- | ------- |
+| notopo  | 93.63%          | 90.13%    | 97.51%    | 93.8%   |
+| topo    | 86.27%          | 93.16%    | 99.25%    | 94.2%   |
+
+### Comparison with Baselines (PubMed)
+
+| Method | Accuracy | Notes |
+| ------ | -------- | ----- |
+| SAGN | 95.17 | GNN, arXiv:2402.08170 |
+| LLaGA-7B | 95.03 | LLM + Graph Projector, arXiv:2402.08170 |
+| GraphSAGE | 94.87 | GNN, arXiv:2402.08170 |
+| **Ours: SFT nonb topo ckpt-1480 (infill)** | **94.2%** | DLM + LoRA, no neighbor labels |
+| **Ours: SFT nonb notopo ckpt-1480 (infill)** | **93.8%** | DLM + LoRA, no neighbor labels |
+| GCN | 92.96 | GNN, arXiv:2402.08170 |
+| GAT | 92.33 | GNN, arXiv:2402.08170 |
+| Ours: Frozen MC (target-only) | 88.69% | DLM zero-shot |
+
+
