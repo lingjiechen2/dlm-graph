@@ -53,6 +53,15 @@ class GraphDataCollator:
             input_ids[i, :seq_len] = torch.tensor(f["input_ids"], dtype=torch.long)
             labels[i, :seq_len] = torch.tensor(f["labels"], dtype=torch.long)
             attention_mask[i, :seq_len] = 1
+            # Zero attention on the reserved-tail pad span in the answer slot
+            # (positions filled with pad_token_id by build_node_sample_category).
+            # This prevents the model from "seeing" those positions during
+            # training, which would otherwise leak GT class length via the
+            # trailing-pad count. Empty when answer fits exactly.
+            ap_start = f.get("answer_pad_start")
+            ap_end = f.get("answer_pad_end")
+            if ap_start is not None and ap_end is not None and ap_end > ap_start:
+                attention_mask[i, ap_start:ap_end] = 0
 
         batch = {
             "input_ids": input_ids,
