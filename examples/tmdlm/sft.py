@@ -99,6 +99,12 @@ class DataArguments:
             "help": "Neighbor label phrasing when include_neighbor_labels=True: bracket|paren|sentence|colon"
         },
     )
+    mask_neighbor_labels: bool = field(
+        default=False,
+        metadata={
+            "help": "If True, replace neighbor class-name tokens with [MASK] in input_ids and train on them jointly with the target answer."
+        },
+    )
     use_topology_mask: bool = field(
         default=True,
         metadata={
@@ -147,6 +153,7 @@ def train():
             max_answer_tokens=data_args.max_answer_tokens,
             include_neighbor_labels=data_args.include_neighbor_labels,
             neighbor_label_format=data_args.neighbor_label_format,
+            mask_neighbor_labels=data_args.mask_neighbor_labels,
         )
         train_dataset = load_tag_dataset(
             data_args.dataset_name, split="train", **_common_kwargs
