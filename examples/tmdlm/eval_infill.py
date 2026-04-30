@@ -343,14 +343,14 @@ def evaluate_with_sampler(
         pos = s["label_token_pos"]
         gt = s["cls_label"]
 
-        # Determine reserve length (# slots the sample has at pos for the answer)
-        if prompt_format == "category_infill":
-            reserve = max_answer_tokens
-        else:
-            # mc_digit: no right-padding; reserve equals real answer_len
-            reserve = s.get("answer_len", 1)
-
-        # Replace [pos : pos + reserve] with max_new_tokens mask tokens
+        # Build the masked eval prompt. After the pipeline alignment, every
+        # sample has a fixed reserved answer window of length `max_answer_tokens`
+        # at [pos, pos + max_answer_tokens). The eval prompt replaces that span
+        # with mask tokens; this is byte-for-byte identical to what eval_logit
+        # constructs (the only legitimate differences live in how we read the
+        # model's output: iterative diffusion + text match here vs single-pass
+        # restricted argmax there).
+        reserve = max_answer_tokens
         prefix = ids[:pos]
         suffix = ids[pos + reserve :]
         gen_window = [tokenizer.mask_token_id] * max_new_tokens
@@ -358,8 +358,8 @@ def evaluate_with_sampler(
         gen_start = len(prefix)
         gen_end = gen_start + max_new_tokens
 
-        # Shift spans in the sample by (max_new_tokens - reserve) for positions
-        # past pos (needed for topology mask construction over the new length)
+        # If max_new_tokens != max_answer_tokens (non-default), positions past
+        # `pos` shift by this delta — adjust node_spans for topology mask.
         shift = max_new_tokens - reserve
         patched_sample = None
         if use_topology_mask:
@@ -522,6 +522,7 @@ def main():
         answer_label_style=args.answer_label_style,
         include_neighbor_labels=args.include_neighbor_labels,
         neighbor_label_format=args.neighbor_label_format,
+        max_samples=args.max_samples,
     )
     logger.info("Loaded %d samples", len(test_dataset))
 
@@ -535,12 +536,23 @@ def main():
         sample.get("answer_len", 1),
     )
 
-    # Resolve generation window length
+    # Resolve generation window length.
+    # Default: align with the training-time reserved answer window so the
+    # eval prompt is byte-for-byte identical to eval_logit. The ONLY difference
+    # between eval_logit and eval_infill should be how the model output is
+    # interpreted (single-pass restricted argmax vs iterative diffusion +
+    # text matching), NOT the input prompt.
     if args.max_new_tokens <= 0:
-        if args.prompt_format == "category_infill":
-            args.max_new_tokens = max(args.max_answer_tokens, 6)
-        else:
-            args.max_new_tokens = args.max_answer_tokens
+        args.max_new_tokens = args.max_answer_tokens
+    if args.max_new_tokens != args.max_answer_tokens:
+        logger.warning(
+            "max_new_tokens=%d differs from max_answer_tokens=%d; the eval "
+            "prompt will NOT match eval_logit's prompt. Pass --max_new_tokens "
+            "%d to align.",
+            args.max_new_tokens,
+            args.max_answer_tokens,
+            args.max_answer_tokens,
+        )
     logger.info(
         "Generation window: max_new_tokens=%d (answer reserve=%d)",
         args.max_new_tokens,

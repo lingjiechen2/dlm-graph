@@ -192,6 +192,10 @@ class EvalLogitArgs:
             "choices": ["bracket", "paren", "sentence", "colon"],
         },
     )
+    max_samples: int = field(
+        default=0,
+        metadata={"help": "Limit eval to first N samples (0 = all)"},
+    )
 
 
 @torch.no_grad()
@@ -261,32 +265,29 @@ def evaluate_layer0(
         label_indices = batch["label_token_indices"]  # [b, max_ans_len]
         b, l = input_ids.shape
 
-        # Mask answer tokens: use labels != -100 for single-token mode,
-        # but for multi-token mode, mask ALL answer positions (including padding)
-        # to prevent answer-length leakage.
+        # Build the masked eval prompt. The answer window at
+        # label_indices[:, :] is overwritten with mask tokens, and attention
+        # is forced to 1 on those positions (the collator zeroed it on
+        # reserved-tail pads for training). Result is byte-identical to the
+        # prompt eval_infill constructs; the only legitimate difference lives
+        # in how we read the model output below (single-pass restricted argmax
+        # vs iterative diffusion + text match there).
         masked_input = input_ids.clone()
-        if max_answer_tokens == 1:
-            maskable = labels != -100  # [b, l]
-            masked_input[maskable] = tokenizer.mask_token_id
-        else:
-            # Mask all answer positions to prevent the model from seeing
-            # which positions are pad vs real tokens (leaks answer length)
-            maskable = labels != -100
-            masked_input[maskable] = tokenizer.mask_token_id
-            for j in range(label_indices.shape[1]):
-                masked_input[torch.arange(b, device=device), label_indices[:, j]] = (
-                    tokenizer.mask_token_id
-                )
-
-        # Build attention mask
+        b_arange = torch.arange(b, device=device)
+        attn1d = batch.get("attention_mask", None)
+        if attn1d is not None:
+            attn1d = attn1d.clone()
+        for j in range(label_indices.shape[1]):
+            masked_input[b_arange, label_indices[:, j]] = tokenizer.mask_token_id
+            if attn1d is not None:
+                attn1d[b_arange, label_indices[:, j]] = 1
         if use_topology_mask and "topology_mask" in batch:
             topo = batch["topology_mask"]  # [b, l, l]
             additive = torch.zeros(b, l, l, device=device, dtype=model.dtype)
             additive = additive.masked_fill(topo == 0, float("-inf"))
             attn_mask = additive.unsqueeze(1)  # [b, 1, l, l]
         else:
-            # Standard padding-only mask (full attention among valid tokens)
-            attn_mask = batch.get("attention_mask", None)  # [b, l]
+            attn_mask = attn1d
 
         # Single forward pass
         pos_ids = batch.get("position_ids", None)
@@ -452,6 +453,7 @@ def main():
         answer_label_style=args.answer_label_style,
         include_neighbor_labels=args.include_neighbor_labels,
         neighbor_label_format=args.neighbor_label_format,
+        max_samples=args.max_samples,
     )
     logger.info("Loaded %d samples", len(test_dataset))
 
