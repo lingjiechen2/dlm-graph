@@ -17,7 +17,7 @@ Each returned sample contains:
 import os
 import random
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import torch
 import numpy as np
@@ -1166,7 +1166,7 @@ def _build_tag_samples(
 
 
 def load_tag_dataset(
-    dataset_name: str,
+    dataset_name,
     tokenizer,
     split: str = "train",
     max_seq_len: int = 2048,
@@ -1184,12 +1184,110 @@ def load_tag_dataset(
     include_options: bool = True,
     mask_neighbor_labels: bool = False,
     max_samples: int = 0,
+    balance_merged: bool = False,
+    resample_strategy: str = "none",
+    boost_spec: str = "",
 ) -> Dataset:
     """
     Load a TAG dataset and return a HuggingFace Dataset of TM-DLM samples.
 
     Supports: "cora", "pubmed", "ogbn-arxiv".
+
+    `dataset_name` accepts either a single dataset name (str) or a list of
+    names (e.g. ["cora", "pubmed"]) to **merge** datasets. When merging,
+    each sample carries its own dataset's class list inside its prompt, so
+    the answer space is per-sample and class indices do not collide.
+    Samples are concatenated and shuffled with the provided seed; if
+    `max_samples > 0` it caps total merged size (sampled proportionally).
+
+    When merging, `balance_merged=True` downsamples each dataset to
+    `min(per-dataset sample counts)` before concatenation, so every dataset
+    contributes the same number of samples. Useful when one dataset is much
+    larger and would otherwise dominate the gradient.
     """
+    if isinstance(dataset_name, (list, tuple)):
+        names = list(dataset_name)
+        if not names:
+            raise ValueError("dataset_name list must be non-empty")
+        if len(names) == 1:
+            return load_tag_dataset(
+                names[0], tokenizer, split=split, max_seq_len=max_seq_len,
+                max_neighbors_per_hop=max_neighbors_per_hop, max_hops=max_hops,
+                seed=seed, mask_target_text=mask_target_text,
+                max_answer_tokens=max_answer_tokens, prompt_layout=prompt_layout,
+                use_chat_template=use_chat_template, prompt_format=prompt_format,
+                answer_label_style=answer_label_style,
+                include_neighbor_labels=include_neighbor_labels,
+                neighbor_label_format=neighbor_label_format,
+                include_options=include_options,
+                mask_neighbor_labels=mask_neighbor_labels,
+                max_samples=max_samples,
+                balance_merged=balance_merged,
+                resample_strategy="none",  # single dataset: skip merge-level strategies
+                boost_spec="",
+            )
+        for n in names:
+            if n not in DATASET_CONFIGS:
+                raise ValueError(
+                    f"Unknown dataset: {n}. Supported: {list(DATASET_CONFIGS.keys())}"
+                )
+
+        per_dataset_samples: Dict[str, list] = {}
+        class_names_per_dataset: Dict[str, list] = {}
+        for n in names:
+            node_data, adj, class_names, split_ids = _DATA_LOADERS[n](
+                DATASET_CONFIGS[n], split, seed
+            )
+            ds_samples = _build_tag_samples(
+                split_ids, node_data, adj, class_names, tokenizer,
+                max_seq_len, max_neighbors_per_hop, max_hops, seed,
+                mask_target_text, max_answer_tokens, prompt_layout,
+                use_chat_template, prompt_format, answer_label_style,
+                include_neighbor_labels=include_neighbor_labels,
+                neighbor_label_format=neighbor_label_format,
+                include_options=include_options,
+                mask_neighbor_labels=mask_neighbor_labels,
+            )
+            for s in ds_samples:
+                s["dataset"] = n
+            per_dataset_samples[n] = ds_samples
+            class_names_per_dataset[n] = class_names
+
+        # Resampling: prefer the new strategy API; fall back to the legacy
+        # `balance_merged=True` flag for backward compatibility.
+        effective_strategy = resample_strategy
+        if balance_merged and resample_strategy == "none":
+            effective_strategy = "balance_datasets"
+        if effective_strategy != "none":
+            from dllm.data.resample import apply_resampling
+            per_dataset_samples = apply_resampling(
+                per_dataset_samples,
+                strategy=effective_strategy,
+                seed=seed,
+                boost_spec=boost_spec,
+                class_names_per_dataset=class_names_per_dataset,
+            )
+
+        per_dataset_counts = {n: len(s) for n, s in per_dataset_samples.items()}
+
+        all_samples = []
+        for n in names:
+            all_samples.extend(per_dataset_samples[n])
+
+        rng = random.Random(seed)
+        rng.shuffle(all_samples)
+
+        if max_samples and max_samples > 0:
+            all_samples = all_samples[:max_samples]
+
+        dataset = Dataset.from_list(all_samples)
+        dataset.info.description = (
+            f"TM-DLM merged ({split}) " + ", ".join(
+                f"{n}={per_dataset_counts[n]}" for n in names
+            )
+        )
+        return dataset
+
     if dataset_name not in DATASET_CONFIGS:
         raise ValueError(
             f"Unknown dataset: {dataset_name}. Supported: {list(DATASET_CONFIGS.keys())}"
@@ -1223,6 +1321,22 @@ def load_tag_dataset(
         include_options=include_options,
         mask_neighbor_labels=mask_neighbor_labels,
     )
+
+    # Apply class-level resampling for single-dataset path (boost / balance_classes).
+    if resample_strategy in ("balance_classes", "boost"):
+        for s in samples:
+            s["dataset"] = dataset_name
+        from dllm.data.resample import apply_resampling
+        out = apply_resampling(
+            {dataset_name: samples},
+            strategy=resample_strategy,
+            seed=seed,
+            boost_spec=boost_spec,
+            class_names_per_dataset={dataset_name: class_names},
+        )
+        samples = out[dataset_name]
+        rng = random.Random(seed)
+        rng.shuffle(samples)
 
     dataset = Dataset.from_list(samples)
     dataset.info.description = (

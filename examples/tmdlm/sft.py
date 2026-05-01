@@ -39,7 +39,13 @@ class ModelArguments(dllm.utils.ModelArguments):
 class DataArguments:
     dataset_name: str = field(
         default="cora",
-        metadata={"help": "TAG dataset: cora | pubmed | ogbn-arxiv | ogbn-products"},
+        metadata={
+            "help": (
+                "TAG dataset: cora | pubmed | ogbn-arxiv | ogbn-products. "
+                "Pass a comma-separated list (e.g. 'cora,pubmed') to merge "
+                "multiple datasets into a single shuffled training set."
+            )
+        },
     )
     max_seq_len: int = field(
         default=2048,
@@ -111,6 +117,24 @@ class DataArguments:
             "help": "Apply star-topology attention mask restricting neighbor-target attention"
         },
     )
+    balance_merged: bool = field(
+        default=False,
+        metadata={
+            "help": "Legacy flag: equivalent to --resample_strategy balance_datasets when merging."
+        },
+    )
+    resample_strategy: str = field(
+        default="none",
+        metadata={
+            "help": "Resampling strategy applied to per-dataset sample lists: 'none' | 'balance_datasets' (downsample each merged dataset to min count) | 'balance_classes' (per-dataset, resample each class to median count) | 'boost' (oversample specified classes via --boost_spec)"
+        },
+    )
+    boost_spec: str = field(
+        default="",
+        metadata={
+            "help": "Comma-separated 'dataset:class_name:factor' entries used when resample_strategy=boost. E.g. 'cora:Theory:2,cora:Rule Learning:3'."
+        },
+    )
 
 
 @dataclass
@@ -154,12 +178,18 @@ def train():
             include_neighbor_labels=data_args.include_neighbor_labels,
             neighbor_label_format=data_args.neighbor_label_format,
             mask_neighbor_labels=data_args.mask_neighbor_labels,
+            balance_merged=data_args.balance_merged,
+            resample_strategy=data_args.resample_strategy,
+            boost_spec=data_args.boost_spec,
         )
+        ds_arg = data_args.dataset_name
+        if isinstance(ds_arg, str) and "," in ds_arg:
+            ds_arg = [s.strip() for s in ds_arg.split(",") if s.strip()]
         train_dataset = load_tag_dataset(
-            data_args.dataset_name, split="train", **_common_kwargs
+            ds_arg, split="train", **_common_kwargs
         )
         val_dataset = load_tag_dataset(
-            data_args.dataset_name, split="val", **_common_kwargs
+            ds_arg, split="val", **_common_kwargs
         )
 
     # --- Trainer ---
