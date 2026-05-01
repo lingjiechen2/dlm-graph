@@ -1,153 +1,214 @@
 # DLM-Graph: Node Classification Results
 
+All results below are **post the prompt/option-block label-leakage fix** in
+`dllm/data/graph.py` (2026-04-29). All training runs use
+`include_neighbor_labels=False` (**nonb** — neighbor text only, no oracle
+class labels — fair vs. LLaGA). Earlier runs that either used `nbmask`
+(oracle neighbor labels) or pre-date the leakage fix are not included here.
+
 ## Model & Setup
 
-- **Model**: LLaDA-8B-Instruct (GSAI-ML/LLaDA-8B-Instruct), 8B params, masked discrete diffusion LM
-- **Classification format**: Multiple-choice with single-digit answers (tokens "0"–"6" for Cora, "0"–"2" for PubMed)
-- **SFT config**: LoRA r=32, alpha=64, all-linear modules, 83.9M trainable params (1.04%), lr=5e-5, effective batch=16
+- **Model**: LLaDA-8B-Instruct (GSAI-ML/LLaDA-8B-Instruct), 8B params, masked discrete diffusion LM.
+- **Training**: LoRA r=64, alpha=64, all-linear modules, lr=5e-5, effective batch 32 (per-device 4 × grad-accum 8), max_hops=2, max_neighbors_per_hop=10, position_id_type=sequential, gradient_checkpointing on, 10 epochs unless noted.
+- **Neighbor labels**: `include_neighbor_labels=False` (**nonb**) for all runs in this file.
+- **Test sets**: Cora 542 nodes / 7 classes; PubMed 999 nodes / 3 classes (custom stratified split, 333/class).
 
-## Cora (7 classes, 542 test nodes, supervised setting)
+## External Baselines
 
-Baseline source: "When Do LLMs Help With Node Classification?" (arXiv:2502.00829), Table 2, supervised setting.
+### Cora — supervised
+Source: "When Do LLMs Help With Node Classification?" (arXiv:2502.00829), Table 2.
 
-### Comparison with Baselines
+| Method                 | Type                  | Accuracy       |
+| ---------------------- | --------------------- | -------------- |
+| GCN + LLM Emb          | GNN + LLM embeddings  | 88.15 ± 1.79   |
+| TAPE                   | LLM-as-Reasoner       | 88.05 ± 1.76   |
+| LLaGA                  | LLM + Graph Projector | 87.55 ± 1.15   |
+| GraphSAGE (ShallowEmb) | GNN                   | 87.44 ± 1.74   |
+| GCN (ShallowEmb)       | GNN                   | 87.41 ± 2.08   |
+| ENGINE                 | GNN + LLM             | 87.00 ± 1.60   |
+| GLEM                   | GNN + LLM             | 86.81 ± 1.19   |
+| GAT (ShallowEmb)       | GNN                   | 86.68 ± 1.12   |
+| RoBERTa-355M           | LM only               | 83.17 ± 0.84   |
+| GraphGPT               | LLM + Graph           | 82.29 ± 0.26   |
 
+### PubMed — supervised
+Source: LLaGA (arXiv:2402.08170), Table 1 (Single Focus). Note our PubMed split is custom stratified (999 test) from TAPE files, not Planetoid — comparison approximate.
 
-| Method                          | Type                  | Accuracy       | Source           |
-| ------------------------------- | --------------------- | -------------- | ---------------- |
-| GCN + LLM Emb                   | GNN + LLM embeddings  | 88.15 +/- 1.79 | arXiv:2502.00829 |
-| TAPE                            | LLM-as-Reasoner       | 88.05 +/- 1.76 | arXiv:2502.00829 |
-| LLaGA                           | LLM + Graph Projector | 87.55 +/- 1.15 | arXiv:2502.00829 |
-| GraphSAGE (ShallowEmb)          | GNN                   | 87.44 +/- 1.74 | arXiv:2502.00829 |
-| GCN (ShallowEmb)                | GNN                   | 87.41 +/- 2.08 | arXiv:2502.00829 |
-| ENGINE                          | GNN + LLM             | 87.00 +/- 1.60 | arXiv:2502.00829 |
-| GLEM                            | GNN + LLM             | 86.81 +/- 1.19 | arXiv:2502.00829 |
-| GAT (ShallowEmb)                | GNN                   | 86.68 +/- 1.12 | arXiv:2502.00829 |
-| **Ours: SFT target-only (ep3)** | **DLM + LoRA**        | **84.13**      | —                |
-| RoBERTa-355M                    | LM only               | 83.17 +/- 0.84 | arXiv:2502.00829 |
-| GraphGPT                        | LLM + Graph           | 82.29 +/- 0.26 | arXiv:2502.00829 |
-| Ours: SFT target-only (ep1)     | DLM + LoRA            | 82.47          | —                |
-| SentenceBERT-66M                | LM only               | 79.61 +/- 1.40 | arXiv:2502.00829 |
-
-
-### Our Full Results on Cora
-
-
-| Method                                       | Accuracy   | Notes                                          |
-| -------------------------------------------- | ---------- | ---------------------------------------------- |
-| **SFT target-only (ep3)**                    | **84.13%** | Best result, LoRA fine-tuned                   |
-| SFT target-only (ep4)                        | 83.95%     | Slight overfit                                 |
-| SFT target-only (ep1)                        | 82.47%     |                                                |
-| SFT target-only (ep2)                        | 81.92%     |                                                |
-| SFT 2-hop full attn (ep1)                    | 79.15%     | Neighbors hurt during training                 |
-| SFT dense mask (ep3)                         | 73.43%     | Dense masking dilutes classification signal    |
-| SFT target-only ep3, eval w/ 2-hop full attn | 71.77%     | Neighbors at inference hurt                    |
-| Frozen MC (target-only)                      | 62.73%     | Best frozen result                             |
-| Frozen MC (2-hop full attn)                  | 60.33%     |                                                |
-| Frozen MC (1-hop full attn)                  | 57.01%     |                                                |
-| SFT target-only ep3, eval w/ 2-hop topo mask | 57.38%     | Topo mask at inference hurts most              |
-| Frozen first-token (target-only)             | 51.29%     | Class-name token classification                |
-| Frozen MC (1-hop topo mask)                  | 50.74%     |                                                |
-| Frozen MC (2-hop topo mask)                  | 49.26%     |                                                |
-| Frozen first-token (2-hop topo mask)         | 48.34%     |                                                |
-| Frozen first-token (no neighbors)            | 46.86%     |                                                |
-| Frozen first-token (2-hop full attn)         | 44.46%     |                                                |
-| Frozen MC (1-hop topo mask + topo posid)     | 28.78%     | Per-node position ID reset breaks frozen model |
-
-
-### Per-Class Accuracy (Cora SFT, best epochs)
-
-
-| Epoch | Overall    | Case Based | Genetic Alg | Neural Net | Prob Methods | RL    | Rule Learn | Theory |
-| ----- | ---------- | ---------- | ----------- | ---------- | ------------ | ----- | ---------- | ------ |
-| 1     | 82.47%     | 83.9%      | 94.4%       | 88.9%      | 73.5%        | 80.4% | 69.0%      | 70.4%  |
-| 2     | 81.92%     | 91.9%      | 92.2%       | 85.0%      | 82.4%        | 85.7% | 54.8%      | 66.2%  |
-| **3** | **84.13%** | 88.7%      | 92.2%       | 89.5%      | 80.9%        | 85.7% | 64.3%      | 71.8%  |
-| 4     | 83.95%     | 87.1%      | 92.2%       | 89.5%      | 82.4%        | 85.7% | 61.9%      | 71.8%  |
-
+| Method      | Type                  | Accuracy |
+| ----------- | --------------------- | -------- |
+| SAGN        | GNN                   | 95.17    |
+| LLaGA-ND-7B | LLM + Graph Projector | 95.03    |
+| LLaGA-HO-7B | LLM + Graph Projector | 95.03    |
+| NodeFormer  | Graph Transformer     | 94.90    |
+| GraphSAGE   | GNN                   | 94.87    |
+| GCN         | GNN                   | 92.96    |
+| GAT         | GNN                   | 92.33    |
+| SGC         | GNN                   | 87.35    |
 
 ---
 
-## PubMed (3 classes, supervised setting)
+## §1. Cora — SFT mc_digit nonb (run tag `cora_20260429_mcdigit_nonb_fixed`)
 
-Baseline source: [LLaGA, Table 1 (Single Focus)](https://arxiv.org/pdf/2402.08170), PubMed node classification.
+Single-dataset Cora, mc_digit (digit answer over `{0..6}`), 510 steps total.
 
-**Note**: Our PubMed results use a custom stratified split (999 test, 333/class) from TAPE data files, not the standard Planetoid split. Direct comparison with baselines is approximate.
+### Logit Eval (direct token scoring over class digits)
 
-### Comparison with Baselines
+| Checkpoint | notopo | topo |
+|-----------:|-------:|-----:|
+|  26 | 78.23 | 75.46 |
+|  52 | 81.55 | 81.73 |
+|  78 | 85.24 | 84.50 |
+| 104 | 85.61 | 83.58 |
+| 130 | 86.35 | 86.72 |
+| 156 | 86.16 | 87.27 |
+| 182 | 89.11 | 87.82 |
+| 208 | 89.11 | 87.64 |
+| 234 | 88.75 | 87.45 |
+| 260 | 90.41 | 88.93 |
+| 286 | 89.67 | 88.93 |
+| 312 | 90.59 | **90.04** ⭐ |
+| **338** | **90.77** ⭐ | 89.11 |
+| 364 | 90.41 | 89.11 |
+| 390 | 90.22 | 89.85 |
+| 416 | 90.41 | 89.48 |
+| 442 | 90.59 | 89.67 |
+| 468 | 90.41 | 89.67 |
+| 494 | 90.22 | 89.67 |
+| 510 | 90.41 | 89.48 |
 
+JSONL: `/tmp/dlm-graph-eval-jsonl/eval-cora-2hop-{notopo,topo}-nonb-cora_20260429_mcdigit_nonb_fixed.jsonl`
 
-| Method                            | Type                  | Accuracy       | Source           |
-| --------------------------------- | --------------------- | -------------- | ---------------- |
-| SAGN                              | GNN                   | 95.17          | arXiv:2402.08170 |
-| LLaGA-ND-7B                       | LLM + Graph Projector | 95.03          | arXiv:2402.08170 |
-| LLaGA-HO-7B                       | LLM + Graph Projector | 95.03          | arXiv:2402.08170 |
-| NodeFormer                        | Graph Transformer     | 94.90          | arXiv:2402.08170 |
-| GraphSAGE                         | GNN                   | 94.87          | arXiv:2402.08170 |
-| GCN                               | GNN                   | 92.96          | arXiv:2402.08170 |
-| GAT                               | GNN                   | 92.33          | arXiv:2402.08170 |
-| **Ours: Frozen MC (target-only)** | **DLM zero-shot**     | **88.69%**     | —                |
-| SGC                               | GNN                   | 87.35          | arXiv:2402.08170 |
-| Ours: Frozen MC (1-hop full attn) | DLM zero-shot         | 84.78%         | —                |
-| Ours: Frozen MC (1-hop topo mask) | DLM zero-shot         | 82.98%         | —                |
+### Infill Eval (masked diffusion gen, 10 steps, T=0)
 
+| Checkpoint | notopo strict | topo strict |
+|-----------:|--------------:|------------:|
+|  26 | 78.41 | 75.65 |
+|  52 | 81.55 | 81.73 |
+|  78 | 85.24 | 84.69 |
+| 104 | 85.42 | 83.76 |
+| 130 | 86.16 | 86.72 |
+| 156 | 86.16 | 86.90 |
+| 182 | 89.11 | 87.82 |
+| 208 | 88.93 | 87.64 |
+| 234 | 88.93 | 87.64 |
+| **260** | **90.96** ⭐ | 88.56 |
+| 286 | 89.48 | 88.93 |
+| 312 | 90.41 | **89.85** ⭐ |
+| 338 | 90.77 | 88.93 |
+| 364 | 90.41 | 89.30 |
+| 390 | 90.04 | 89.67 |
+| 416 | 90.41 | 89.48 |
+| 442 | 90.59 | 89.85 |
+| 468 | 90.59 | 89.67 |
+| 494 | 90.59 | 89.85 |
+| 510 | 90.41 | 89.48 |
 
-### Per-Class Accuracy (PubMed Frozen)
+`accuracy_lenient` matches `accuracy_strict` for all rows.
+JSONL: `/tmp/dlm-graph-eval-jsonl/eval-cora-2hop-{notopo,topo}-nonb-cora_20260429_mcdigit_nonb_fixed-infill.jsonl`
 
+### Cora extras — best 2 ckpts × {nb, hop} variations
 
-| Config          | DM Experimental | DM Type 1 | DM Type 2 | Overall |
-| --------------- | --------------- | --------- | --------- | ------- |
-| Target-only     | 86.2%           | 83.5%     | 96.4%     | 88.69%  |
-| 1-hop full attn | 69.7%           | 87.1%     | 97.6%     | 84.78%  |
-| 1-hop topo mask | 62.2%           | 89.2%     | 97.6%     | 82.98%  |
+Run on the 2 best ckpts per setting (notopo 260+338, topo 312+442).
 
+| Setting | ckpt | logit | infill strict |
+|---------|-----:|------:|--------------:|
+| notopo nb=10 hop=3 | 260 | 90.41 | 90.96 |
+| notopo nb=10 hop=3 | 338 | 90.77 | 90.77 |
+| notopo nb=15 hop=2 | 260 | 89.48 | 89.67 |
+| notopo nb=15 hop=2 | 338 | 90.22 | 90.22 |
+| notopo nb=20 hop=2 | 260 | 89.48 | 89.48 |
+| notopo nb=20 hop=2 | 338 | 90.59 | 90.59 |
+| notopo nb=25 hop=2 | 260 | 89.85 | 89.67 |
+| notopo nb=25 hop=2 | 338 | 90.04 | 90.22 |
+| topo   nb=10 hop=3 | 312 | 90.04 | 89.85 |
+| topo   nb=10 hop=3 | 442 | 89.67 | 89.85 |
+| topo   nb=15 hop=2 | 312 | 89.85 | 89.48 |
+| topo   nb=15 hop=2 | 442 | 89.67 | 89.85 |
+| topo   nb=20 hop=2 | 312 | 89.85 | 89.48 |
+| topo   nb=20 hop=2 | 442 | 90.04 | 90.04 |
+| topo   nb=25 hop=2 | 312 | 89.85 | 89.48 |
+| topo   nb=25 hop=2 | 442 | 89.67 | 89.67 |
+
+Take-away: more neighbors / 3 hops give no meaningful gain over the default 2-hop nb=10 baseline. Best overall remains nb=10, hop=2.
+JSONL: `/tmp/dlm-graph-eval-jsonl/eval-cora-extras-{notopo,topo}-nb{10,15,20,25}-{2,3}h{,-infill}.jsonl`
 
 ---
 
-## PubMed — SFT nonb (mc_digit, include_neighbor_labels=False)
+## Cross-dataset / resampling experiments (2026-04-30)
 
-**Setting**: LoRA r=64 all-linear, 10 epochs, lr=5e-5, effective batch=16, 2-hop, max_neighbors=10.
-`include_neighbor_labels=False` at **both train and eval** — no oracle neighbor class names, fair comparison vs LLaGA.
-Run tag: `pubmed_20260428_mcdigit_nonb`. Test set 999 samples (333/class).
+See `experiment_log.md` for design rationale.
 
-### Logit Eval (direct token scoring)
+### §6. cora+pubmed merged catinfill nonb (run tag `cora-pubmed_20260430`, **killed**)
 
-| Checkpoint | notopo accuracy | topo accuracy |
-| ---------- | --------------- | ------------- |
-| 370        | 99.8%           | 100.0%        |
-| 740        | 100.0%          | 100.0%        |
-| 1110       | 100.0%          | 100.0%        |
-| 1480       | 100.0%          | 100.0%        |
+`prompt_format=category_infill`, `max_answer_tokens=10`, no resampling. Demonstrates class collapse on cora when pubmed dominates the gradient.
 
-**Note**: Logit eval saturates at 100% early. PubMed paper abstracts are highly class-discriminative on their own (DM Experimental / Type 1 / Type 2 have distinct vocabulary), so fine-tuned LLaDA-8B reaches ceiling without graph structure. This makes PubMed mc_digit a weak benchmark for measuring graph reasoning contribution.
+#### Logit Eval
 
-### Infill Eval (masked diffusion generation, 10 steps, temperature=0)
+| ckpt | cora-notopo | cora-topo | pubmed-notopo | pubmed-topo |
+|---:|---:|---:|---:|---:|
+|  211 | 60.70 | 66.79 | 76.29 | 76.55 |
+|  422 | 63.84 | 69.37 | 77.36 | 77.18 |
+|  633 | 46.31 | 70.30 | **77.48** | **77.56** |
+|  844 | 48.52 | 67.71 | 76.93 | 77.03 |
+| 1055 | 39.85 | —     | 77.41 | —     |
+| 1266 | —     | —     | 76.65 | —     |
 
-| Checkpoint | notopo (strict) | topo (strict) |
-| ---------- | --------------- | ------------- |
-| 370        | 90.4%           | 92.6%         |
-| 740        | 93.3%           | 91.7%         |
-| 1110       | 91.9%           | 91.8%         |
-| **1480**   | **93.8%**       | **94.2%**     |
+cora-notopo collapses from 63.84 → 39.85 between ckpt-422 and ckpt-1055; the topo mask delays collapse. Pubmed plateaus ~77% (well below the single-pubmed level on this data) due to vocabulary-level domination by the unconstrained `[Diab]` prefix tokens. Run was killed and replaced by §7.
+JSONL: `/tmp/dlm-graph-eval-jsonl/eval-merged-on-{cora,pubmed}-{notopo,topo}-catinfill-nonb-cora-pubmed_20260430-logit.jsonl`
 
-### Per-Class Accuracy — Infill, checkpoint-1480
+### §7. cora+pubmed merged mc_digit + balanced nonb (run tag `cora-pubmed_20260430_mcdigit_d0_bal_nonb`, **in progress**)
 
-| Setting | DM Experimental | DM Type 1 | DM Type 2 | Overall |
-| ------- | --------------- | --------- | --------- | ------- |
-| notopo  | 93.63%          | 90.13%    | 97.51%    | 93.8%   |
-| topo    | 86.27%          | 93.16%    | 99.25%    | 94.2%   |
+`prompt_format=mc_digit`, `answer_label_style=digit0`, `max_answer_tokens=1`, `--resample_strategy balance_datasets` → each dataset downsampled to min count = 1624. ~1020 steps total, both topo and notopo. Eval still progressing at time of writing.
 
-### Comparison with Baselines (PubMed)
+#### Logit Eval
 
-| Method | Accuracy | Notes |
-| ------ | -------- | ----- |
-| SAGN | 95.17 | GNN, arXiv:2402.08170 |
-| LLaGA-7B | 95.03 | LLM + Graph Projector, arXiv:2402.08170 |
-| GraphSAGE | 94.87 | GNN, arXiv:2402.08170 |
-| **Ours: SFT nonb topo ckpt-1480 (infill)** | **94.2%** | DLM + LoRA, no neighbor labels |
-| **Ours: SFT nonb notopo ckpt-1480 (infill)** | **93.8%** | DLM + LoRA, no neighbor labels |
-| GCN | 92.96 | GNN, arXiv:2402.08170 |
-| GAT | 92.33 | GNN, arXiv:2402.08170 |
-| Ours: Frozen MC (target-only) | 88.69% | DLM zero-shot |
+| ckpt | cora-notopo | cora-topo | pubmed-notopo | pubmed-topo |
+|---:|---:|---:|---:|---:|
+|  51 | 78.04 | 76.38 | 89.76 | 91.00 |
+| 102 | 82.66 | 81.00 | 93.33 | 93.69 |
+| 153 | 85.42 | 84.50 | 92.77 | 93.38 |
+| 204 | 87.64 | 85.98 | 94.32 | 94.75 |
+| 255 | 86.90 | 85.79 | 94.55 | 94.75 |
+| 306 | **89.11** ⭐ | **88.75** ⭐ | 94.60 | 93.94 |
+| 357 | 88.56 | 87.64 | 94.65 | 94.68 |
+| 408 | (pending) | (pending) | (pending) | 94.37 |
+| 459 | (pending) | (pending) | (pending) | 90.09 ← dip |
+| 510 | (pending) | (pending) | (pending) | **94.93** ⭐ ← recovered |
+| 561+ | (pending — followup will catch up) ||||
 
+Switching to `mc_digit + balance_datasets` removes the catinfill class collapse. Cora reaches ~89% (single-cora §1 best 90.77, gap ~1.7pt). Pubmed reaches ~94.9% on topo. The pubmed-topo dip at ckpt-459 (94.7 → 90.1) is followed by a clean recovery at 510 — investigating later ckpts.
+JSONL: `/tmp/dlm-graph-eval-jsonl/eval-merged-bal-on-{cora,pubmed}-{notopo,topo}-mcdigit-cora-pubmed_20260430_bal-logit.jsonl`
 
+### §8. cora-only mc_digit boost nonb (run tag `cora_20260430_mcdigit_boost_nonb`, **in progress**)
+
+Single-dataset cora, `topo`, mc_digit, `--resample_strategy boost --boost_spec "cora:Theory:2,cora:Rule Learning:3"`. Train 1624 → 2045 (+25.9%); ~640 steps. Compare against single-cora topo §1 baseline (90.04 @ ckpt-312) to isolate the boost effect.
+
+#### Logit Eval
+
+| ckpt | cora-topo |
+|---:|---:|
+|  32 | 75.46 |
+|  64 | 83.03 |
+|  96 | 84.87 |
+| 128 | 85.98 |
+| 160 | **87.08** |
+| 192 | 86.35 |
+| 224 | 86.53 |
+
+Per-class vs §1 baseline at comparable training (data still partial): boost ckpt-64 already shows Rule Learning ≈ 94, Theory ≈ 65, vs §1 single-cora at similar step ~74 / ~50 — i.e. boost lifts the two targeted classes earlier in training. Final comparison pending later ckpts (256–640).
+JSONL: `/tmp/dlm-graph-eval-jsonl/eval-cora-boost-topo-mcdigit-cora_20260430_boost-logit.jsonl`
+
+---
+
+## Summary — best per dataset / setting
+
+| Section | Run | Setting | Best ckpt | Acc | Eval |
+|---|---|---|---:|---:|---|
+| §1 | cora single | mc_digit nonb notopo  | 260 | **90.96** | infill strict |
+| §1 | cora single | mc_digit nonb notopo  | 338 | **90.77** | logit |
+| §1 | cora single | mc_digit nonb topo    | 312 | 89.85 / 90.04 | infill / logit |
+| §7 | cora+pubmed merged-bal (cora) | mc_digit nonb notopo | 306 | 89.11 | logit (in-progress) |
+| §7 | cora+pubmed merged-bal (cora) | mc_digit nonb topo   | 306 | 88.75 | logit (in-progress) |
+| §7 | cora+pubmed merged-bal (pubmed) | mc_digit nonb notopo | 357 | 94.65 | logit (in-progress) |
+| §7 | cora+pubmed merged-bal (pubmed) | mc_digit nonb topo   | 510 | **94.93** | logit (in-progress) |
+| §8 | cora boost | mc_digit nonb topo   | 160 | 87.08 | logit (in-progress) |
