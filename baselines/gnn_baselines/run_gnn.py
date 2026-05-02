@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+bei4@illinois.edu
 Run PyG GCN, GraphSAGE, GIN, GAT, GATv2, MixHop, and several GT baselines
 for node classification on Cora / PubMed.
 
