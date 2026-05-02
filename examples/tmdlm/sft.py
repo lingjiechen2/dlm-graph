@@ -135,6 +135,12 @@ class DataArguments:
             "help": "Comma-separated 'dataset:class_name:factor' entries used when resample_strategy=boost. E.g. 'cora:Theory:2,cora:Rule Learning:3'."
         },
     )
+    max_train_samples: int = field(
+        default=0,
+        metadata={
+            "help": "If > 0, subsample the train split to this many samples (deterministic, takes the first N split_ids after seed shuffling). Useful for large datasets like ogbn-arxiv."
+        },
+    )
 
 
 @dataclass
@@ -186,7 +192,9 @@ def train():
         if isinstance(ds_arg, str) and "," in ds_arg:
             ds_arg = [s.strip() for s in ds_arg.split(",") if s.strip()]
         train_dataset = load_tag_dataset(
-            ds_arg, split="train", **_common_kwargs
+            ds_arg, split="train",
+            max_samples=data_args.max_train_samples,
+            **_common_kwargs,
         )
         val_dataset = load_tag_dataset(
             ds_arg, split="val", **_common_kwargs
