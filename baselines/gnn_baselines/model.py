@@ -4,9 +4,11 @@ PyG node-classification baselines.
 Supported models:
 - GCN
 - GraphSAGE
+- GIN
 - GAT
 - GATv2
 - GraphTransformer
+- MixHop
 - DIFFormer
 - SGFormer
 - NodeFormer
@@ -25,6 +27,8 @@ from torch_geometric.nn import (
     GATConv,
     GATv2Conv,
     GCNConv,
+    GINConv,
+    MixHopConv,
     SAGEConv,
     TransformerConv,
 )
@@ -75,6 +79,8 @@ def build_model(
         return GCNNodeClassifier(in_dim, hidden_dim, out_dim, num_layers, dropout)
     if name in ("sage", "graphsage", "graph_sage"):
         return GraphSAGENodeClassifier(in_dim, hidden_dim, out_dim, num_layers, dropout)
+    if name == "gin":
+        return GINNodeClassifier(in_dim, hidden_dim, out_dim, num_layers, dropout)
     if name == "gat":
         return GATNodeClassifier(in_dim, hidden_dim, out_dim, num_layers, dropout, heads)
     if name in ("gatv2", "gat_v2"):
@@ -85,6 +91,8 @@ def build_model(
         return GraphTransformerNodeClassifier(
             in_dim, hidden_dim, out_dim, num_layers, dropout, heads
         )
+    if name == "mixhop":
+        return MixHopNodeClassifier(in_dim, hidden_dim, out_dim, num_layers, dropout)
     if name == "difformer":
         return DIFFormerNodeClassifier(
             in_dim, out_dim, gt_config or GTConfig(hidden_dim, num_layers, heads, dropout)
@@ -99,7 +107,7 @@ def build_model(
         )
     raise ValueError(
         "Unknown model: "
-        f"{name}. Choose gcn, sage, gat, gatv2, graphtransformer, difformer, sgformer, nodeformer."
+        f"{name}. Choose gcn, sage, gin, gat, gatv2, graphtransformer, mixhop, difformer, sgformer, nodeformer."
     )
 
 
@@ -249,6 +257,33 @@ class GraphSAGENodeClassifier(nn.Module):
         return x
 
 
+class GINNodeClassifier(nn.Module):
+    def __init__(self, in_dim: int, hidden_dim: int, out_dim: int, num_layers: int, dropout: float):
+        super().__init__()
+        if num_layers < 1:
+            raise ValueError("num_layers must be >= 1")
+        self.dropout = dropout
+        self.convs = nn.ModuleList()
+
+        dims = [in_dim] + [hidden_dim] * (num_layers - 1) + [out_dim]
+        for i in range(num_layers):
+            mlp_hidden = hidden_dim if i < num_layers - 1 else max(hidden_dim, out_dim)
+            mlp = nn.Sequential(
+                nn.Linear(dims[i], mlp_hidden),
+                nn.ReLU(),
+                nn.Linear(mlp_hidden, dims[i + 1]),
+            )
+            self.convs.append(GINConv(mlp, train_eps=True))
+
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+        for i, conv in enumerate(self.convs):
+            x = conv(x, edge_index)
+            if i < len(self.convs) - 1:
+                x = F.relu(x)
+                x = F.dropout(x, p=self.dropout, training=self.training)
+        return x
+
+
 class GATNodeClassifier(nn.Module):
     def __init__(self, in_dim: int, hidden_dim: int, out_dim: int, num_layers: int, dropout: float, heads: int = 8):
         super().__init__()
@@ -333,6 +368,48 @@ class GraphTransformerNodeClassifier(nn.Module):
             if i < len(self.convs) - 1:
                 x = self.activation(x)
                 x = F.dropout(x, p=self.dropout, training=self.training)
+        return x
+
+
+class MixHopNodeClassifier(nn.Module):
+    """MixHop node classifier with PyG MixHopConv using powers [0, 1, 2]."""
+
+    def __init__(
+        self,
+        in_dim: int,
+        hidden_dim: int,
+        out_dim: int,
+        num_layers: int,
+        dropout: float,
+    ):
+        super().__init__()
+        if num_layers < 1:
+            raise ValueError("num_layers must be >= 1")
+        self.dropout = dropout
+        self.powers = [0, 1, 2]
+        self.convs = nn.ModuleList()
+
+        if num_layers == 1:
+            self.convs.append(MixHopConv(in_dim, out_dim, powers=self.powers))
+            self.out_proj = nn.Linear(out_dim * len(self.powers), out_dim)
+            return
+
+        self.convs.append(MixHopConv(in_dim, hidden_dim, powers=self.powers))
+        in_channels = hidden_dim * len(self.powers)
+        for _ in range(num_layers - 2):
+            self.convs.append(MixHopConv(in_channels, hidden_dim, powers=self.powers))
+            in_channels = hidden_dim * len(self.powers)
+        self.convs.append(MixHopConv(in_channels, out_dim, powers=self.powers))
+        self.out_proj = nn.Linear(out_dim * len(self.powers), out_dim)
+
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+        for i, conv in enumerate(self.convs):
+            x = conv(x, edge_index)
+            if i < len(self.convs) - 1:
+                x = F.relu(x)
+                x = F.dropout(x, p=self.dropout, training=self.training)
+        if hasattr(self, "out_proj"):
+            x = self.out_proj(x)
         return x
 
 

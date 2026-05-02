@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """
-在 Cora / PubMed 上做 PyG GCN、GraphSAGE、GAT、GATv2 以及若干 GT baseline 节点分类。
+Run PyG GCN, GraphSAGE, GIN, GAT, GATv2, MixHop, and several GT baselines
+for node classification on Cora / PubMed.
 
-默认从 LLaGA 仓库的 dataset 目录加载 processed_data.pt（与 LLaGA 预处理一致）。
-可选 --source planetoid 使用 PyG 官方 Planetoid 数据。
+By default, load processed_data.pt from the LLaGA repository's dataset
+directory, matching the LLaGA preprocessing pipeline.
+Use --source planetoid to switch to the official PyG Planetoid data.
 
-示例:
+Examples:
   python run_gnn.py --dataset cora --model gcn --lr 0.01 --num_layers 2 --hidden_dim 16
   python run_gnn.py --dataset pubmed --model sage --epochs 200
+  python run_gnn.py --dataset cora --model gin --hidden_dim 128 --num_layers 2
   python run_gnn.py --dataset cora --model gat --heads 8 --hidden_dim 8
   python run_gnn.py --dataset cora --model gatv2 --heads 8 --hidden_dim 8
+  python run_gnn.py --dataset cora --model mixhop --hidden_dim 64 --num_layers 2
   python run_gnn.py --dataset cora --model graphtransformer --hidden_dim 96 --heads 2 --lr 5e-4
   python run_gnn.py --dataset cora --model difformer --hidden_dim 96 --heads 1 --num_layers 3 --lr 5e-4
   python run_gnn.py --dataset cora --model sgformer --hidden_dim 96 --heads 1 --num_layers 2 --lr 5e-4
@@ -18,11 +22,13 @@
   python run_gnn.py --dataset cora --model gcn --gpu 1
   python run_gnn.py --dataset pubmed --model gcn --batch_size 1024 --neighbor_fanout 25
 
-结果默认保存到 gnn/result/<时间戳>_<dataset>_<model>/（metrics.json、best_model.pt）。
+Results are saved by default to gnn/result/<timestamp>_<dataset>_<model>/
+(metrics.json, best_model.pt).
 
 batch_size:
-  - 0（默认）：全图一次前向，无 mini-batch。
-  - >0：按训练节点做 NeighborLoader 子图 batch；验证/测试仍为全图。
+  - 0 (default): run one full-graph forward pass without mini-batches.
+  - >0: build NeighborLoader subgraph batches from training nodes; validation
+    and testing still use the full graph.
 """
 
 from __future__ import annotations
@@ -44,7 +50,8 @@ from torch_geometric.loader import NeighborLoader
 
 from model import GTConfig, build_model
 
-GT_MODELS = {"graphtransformer", "difformer", "sgformer", "nodeformer"}
+FULL_GRAPH_ONLY_MODELS = {"difformer", "sgformer", "nodeformer"}
+GT_MODELS = {"graphtransformer", *FULL_GRAPH_ONLY_MODELS}
 
 
 def str2bool(value: str | bool | None) -> bool | None:
@@ -90,12 +97,34 @@ def build_gt_config(args: argparse.Namespace) -> GTConfig:
 
 @dataclass
 class GraphDatasetInfo:
-    """节点分类所需元信息（兼容 Planetoid 与 LLaGA Data）。"""
+    """Metadata needed for node classification, compatible with Planetoid and LLaGA Data."""
 
     data: Data
     num_node_features: int
     num_classes: int
     source: str
+
+
+def ensure_data_contiguous(data: Data) -> Data:
+    """Make PyG tensors contiguous before NeighborLoader builds CSC structures."""
+    for attr in ("x", "edge_index", "y", "train_mask", "val_mask", "test_mask"):
+        if hasattr(data, attr):
+            value = getattr(data, attr)
+            if torch.is_tensor(value):
+                setattr(data, attr, value.contiguous())
+    return data
+
+
+def clone_node_classification_tensors(data: Data) -> Data:
+    """Keep only tensor attributes NeighborLoader can safely slice."""
+    return Data(
+        x=data.x.contiguous(),
+        edge_index=data.edge_index.contiguous(),
+        y=data.y.contiguous(),
+        train_mask=data.train_mask.contiguous(),
+        val_mask=data.val_mask.contiguous(),
+        test_mask=data.test_mask.contiguous(),
+    )
 
 
 def _default_llaga_dataset_root() -> Path:
@@ -108,39 +137,40 @@ def _default_result_dir() -> Path:
 
 
 def _neighbor_sampling_backend_available() -> bool:
-    """NeighborLoader 底层需要 torch-sparse 或 pyg-lib 之一。"""
+    """NeighborLoader requires either torch-sparse or pyg-lib as a backend."""
     return importlib.util.find_spec("torch_sparse") is not None or importlib.util.find_spec(
         "pyg_lib"
     ) is not None
 
 
 def load_llaga_processed(dataset_name: str, dataset_root: Path) -> GraphDatasetInfo:
-    """从 LLaGA 的 dataset/<name>/processed_data.pt 加载 PyG Data。"""
+    """Load PyG Data from LLaGA's dataset/<name>/processed_data.pt."""
     name = dataset_name.lower()
     if name not in ("cora", "pubmed"):
         raise ValueError(
-            f"LLaGA 源目前仅支持 cora、pubmed，got {dataset_name}. "
-            "CiteSeer 请使用 --source planetoid。"
+            f"The LLaGA source currently supports only cora and pubmed; got {dataset_name}. "
+            "Use --source planetoid for CiteSeer."
         )
     path = dataset_root / name / "processed_data.pt"
     if not path.is_file():
         raise FileNotFoundError(
-            f"未找到 LLaGA 数据文件: {path}\n"
-            f"请确认已放置 processed_data.pt，或通过 --llaga_dataset_root 指定 dataset 目录。"
+            f"LLaGA data file not found: {path}\n"
+            f"Make sure processed_data.pt exists, or set the dataset directory with --llaga_dataset_root."
         )
     data = torch.load(path, map_location="cpu", weights_only=False)
     if not isinstance(data, Data):
-        raise TypeError(f"期望 torch_geometric.data.Data，得到 {type(data)}")
+        raise TypeError(f"Expected torch_geometric.data.Data, got {type(data)}")
 
     for mask_name in ("train_mask", "val_mask", "test_mask"):
         if not hasattr(data, mask_name):
-            raise AttributeError(f"Data 缺少 {mask_name}")
+            raise AttributeError(f"Data is missing {mask_name}")
         m = getattr(data, mask_name)
         if m.dtype != torch.bool:
             setattr(data, mask_name, m.bool())
 
     if data.y.dim() > 1:
         data.y = data.y.view(-1)
+    ensure_data_contiguous(data)
 
     n_feat = int(data.x.shape[1])
     if hasattr(data, "num_classes") and data.num_classes is not None:
@@ -160,9 +190,9 @@ def load_planetoid(name: str, root: str) -> GraphDatasetInfo:
     name_map = {"cora": "Cora", "pubmed": "PubMed", "citeseer": "CiteSeer"}
     key = name.lower()
     if key not in name_map:
-        raise ValueError(f"dataset 应为 cora / pubmed / citeseer，got {name}")
+        raise ValueError(f"dataset must be cora / pubmed / citeseer; got {name}")
     dataset = Planetoid(root=root, name=name_map[key])
-    data = dataset[0]
+    data = ensure_data_contiguous(dataset[0])
     return GraphDatasetInfo(
         data=data,
         num_node_features=dataset.num_node_features,
@@ -181,11 +211,12 @@ def set_seed(seed: int) -> None:
 
 def resolve_device(device: str | None, gpu: int | None) -> torch.device:
     """
-    解析训练设备。
-    - --device cpu：强制 CPU。
-    - --device cuda 或 cuda:N：按字符串使用（显式 cuda:N 优先于 --gpu）。
-    - --gpu K：使用 cuda:K（在未指定带索引的 cuda:N 时生效）。
-    - 均未指定：有 CUDA 则用 cuda:0，否则 CPU。
+    Resolve the training device.
+    - --device cpu: force CPU.
+    - --device cuda or cuda:N: use the given device string; explicit cuda:N
+      takes precedence over --gpu.
+    - --gpu K: use cuda:K when no indexed cuda:N device is specified.
+    - If neither is specified, use cuda:0 when CUDA is available; otherwise CPU.
     """
     if device is not None and device.lower() == "cpu":
         return torch.device("cpu")
@@ -193,20 +224,20 @@ def resolve_device(device: str | None, gpu: int | None) -> torch.device:
     if device is not None and ":" in device and device.lower().startswith("cuda"):
         dev = torch.device(device)
         if dev.type == "cuda" and not torch.cuda.is_available():
-            raise RuntimeError(f"指定了 {device}，但当前环境不可用 CUDA。")
+            raise RuntimeError(f"{device} was specified, but CUDA is not available.")
         idx = dev.index if dev.index is not None else 0
         if torch.cuda.is_available() and (idx < 0 or idx >= torch.cuda.device_count()):
             raise RuntimeError(
-                f"设备 {device} 无效，可见 GPU 数量为 {torch.cuda.device_count()}。"
+                f"Invalid device {device}; visible GPU count is {torch.cuda.device_count()}."
             )
         return dev
 
     if gpu is not None:
         if not torch.cuda.is_available():
-            raise RuntimeError("已设置 --gpu，但当前环境不可用 CUDA。")
+            raise RuntimeError("--gpu was set, but CUDA is not available.")
         n = torch.cuda.device_count()
         if gpu < 0 or gpu >= n:
-            raise RuntimeError(f"--gpu={gpu} 无效，可见 GPU 数量为 {n}。")
+            raise RuntimeError(f"--gpu={gpu} is invalid; visible GPU count is {n}.")
         return torch.device(f"cuda:{gpu}")
 
     if device is not None:
@@ -241,8 +272,11 @@ def save_run_results(
     test_acc_at_best: float,
     final_test: float,
     best_state: dict | None,
+    best_epoch: int,
+    stopped_epoch: int | None,
+    epochs_ran: int,
 ) -> Path:
-    """在 result_base 下创建本次运行的子目录，写入 metrics.json 与 best_model.pt。"""
+    """Create the run directory under result_base and write metrics.json and best_model.pt."""
     result_base.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = result_base / f"{stamp}_{args.dataset}_{args.model}"
@@ -257,6 +291,10 @@ def save_run_results(
         "best_val_acc": best_val,
         "test_acc_at_best_val": test_acc_at_best,
         "final_test_acc": final_test,
+        "best_epoch": best_epoch,
+        "stopped_epoch": stopped_epoch,
+        "epochs_ran": epochs_ran,
+        "early_stopped": stopped_epoch is not None,
         "num_node_features": info.num_node_features,
         "num_classes": info.num_classes,
         "hyperparameters": _args_to_jsonable(args),
@@ -279,6 +317,10 @@ def save_run_results(
                     "best_val_acc": best_val,
                     "test_acc_at_best_val": test_acc_at_best,
                     "final_test_acc": final_test,
+                    "best_epoch": best_epoch,
+                    "stopped_epoch": stopped_epoch,
+                    "epochs_ran": epochs_ran,
+                    "early_stopped": stopped_epoch is not None,
                 },
                 "hyperparameters": _args_to_jsonable(args),
                 "data_source": info.source,
@@ -293,7 +335,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=(
             "PyG node classification "
-            "(GCN / GraphSAGE / GAT / GATv2 / GraphTransformer / DIFFormer / SGFormer / NodeFormer)"
+            "(GCN / GraphSAGE / GIN / GAT / GATv2 / GraphTransformer / MixHop / DIFFormer / SGFormer / NodeFormer)"
         )
     )
     p.add_argument(
@@ -301,89 +343,101 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="llaga",
         choices=("llaga", "planetoid"),
-        help="llaga: 使用 LLaGA/dataset/*/processed_data.pt；planetoid: PyG 官方数据",
+        help="llaga: use LLaGA/dataset/*/processed_data.pt; planetoid: use official PyG data",
     )
-    p.add_argument("--dataset", type=str, default="cora", help="cora | pubmed（planetoid 时可加 citeseer）")
+    p.add_argument("--dataset", type=str, default="cora", help="cora | pubmed (citeseer is also available with planetoid)")
     p.add_argument(
         "--llaga_dataset_root",
         type=str,
         default=None,
-        help="LLaGA 的 dataset 目录；默认为本仓库 LLaGA/dataset",
+        help="LLaGA dataset directory; defaults to this repository's LLaGA/dataset",
     )
-    p.add_argument("--data_root", type=str, default="./data", help="仅 planetoid：数据下载目录")
+    p.add_argument("--data_root", type=str, default="./data", help="planetoid only: data download directory")
     p.add_argument(
         "--model",
         type=str,
         default="gcn",
-        help="gcn | sage | gat | gatv2 | graphtransformer | difformer | sgformer | nodeformer",
+        help="gcn | sage | gin | gat | gatv2 | graphtransformer | mixhop | difformer | sgformer | nodeformer",
     )
     p.add_argument(
         "--hidden_dim",
         type=int,
         default=128,
-        help="隐层维度（GAT/GATv2 为每头输出维）",
+        help="Hidden dimension; for GAT/GATv2, this is the per-head output dimension",
     )
-    p.add_argument("--num_layers", type=int, default=2, help="消息传递层数")
+    p.add_argument("--num_layers", type=int, default=2, help="Number of message-passing layers")
     p.add_argument("--dropout", type=float, default=0.3)
     p.add_argument(
-        "--heads", type=int, default=8, help="GAT/GATv2 注意力头数（仅 gat/gatv2）"
+        "--heads", type=int, default=8, help="Number of GAT/GATv2 attention heads (gat/gatv2 only)"
     )
     p.add_argument("--lr", type=float, default=0.01)
     p.add_argument("--weight_decay", type=float, default=1e-5)
     p.add_argument("--epochs", type=int, default=500)
     p.add_argument(
+        "--patience",
+        type=int,
+        default=0,
+        help="Early-stopping patience; 0 disables it, >0 stops after N epochs without val acc improvement",
+    )
+    p.add_argument(
+        "--min_delta",
+        type=float,
+        default=0.0,
+        help="Minimum val acc improvement required; used only for early stopping and best checkpoint selection",
+    )
+    p.add_argument(
         "--batch_size",
         type=int,
         default=0,
-        help="训练 batch：0=全图（默认）；>0 时用 NeighborLoader（需 torch-sparse 或 pyg-lib），否则自动退回全图",
+        help="Training batch size: 0=full graph (default); >0 uses NeighborLoader if torch-sparse or pyg-lib is available, otherwise falls back to full graph",
     )
     p.add_argument(
         "--neighbor_fanout",
         type=int,
         default=25,
-        help="仅 mini-batch 时有效：每层邻居采样数，重复 num_layers 次",
+        help="Mini-batch only: number of neighbors sampled per layer, repeated num_layers times",
     )
     p.add_argument("--seed", type=int, default=42)
     p.add_argument(
         "--gpu",
         type=int,
         default=None,
-        help="CUDA 设备编号（如 0、1），等价于使用 cuda:该编号；与 --device cuda:N 二选一即可",
+        help="CUDA device index, e.g. 0 or 1; equivalent to cuda:<index>, alternative to --device cuda:N",
     )
     p.add_argument(
         "--device",
         type=str,
         default=None,
-        help="设备：cpu / cuda / cuda:N；默认自动选 GPU0 或 CPU。显式 cuda:N 时优先于 --gpu",
+        help="Device: cpu / cuda / cuda:N; defaults to GPU0 or CPU. Explicit cuda:N takes precedence over --gpu",
     )
     p.add_argument(
         "--result_dir",
         type=str,
         default=None,
-        help="结果保存目录，默认为本目录下的 result/",
+        help="Directory for saved results; defaults to result/ under this directory",
     )
-    p.add_argument("--gt_use_graph", type=str2bool, default=True, help="GT 模型是否融合图结构分支")
-    p.add_argument("--gt_graph_weight", type=float, default=0.8, help="GT 图分支权重")
-    p.add_argument("--gt_use_weight", type=str2bool, default=True, help="GT 注意力是否学习 value 投影")
-    p.add_argument("--gt_use_residual", type=str2bool, default=True, help="GT 模型是否启用残差")
-    p.add_argument("--gt_use_source", type=str2bool, default=True, help="DIFFormer 是否融合初始特征")
-    p.add_argument("--gt_use_act", type=str2bool, default=True, help="GT 模型层后是否加激活")
-    p.add_argument("--gt_aggregate", type=str, default="add", help="SGFormer 聚合方式: add | cat")
+    p.add_argument("--gt_use_graph", type=str2bool, default=True, help="Whether GT models fuse the graph-structure branch")
+    p.add_argument("--gt_graph_weight", type=float, default=0.8, help="Weight for the GT graph branch")
+    p.add_argument("--gt_use_weight", type=str2bool, default=True, help="Whether GT attention learns the value projection")
+    p.add_argument("--gt_use_residual", type=str2bool, default=True, help="Whether GT models enable residual connections")
+    p.add_argument("--gt_use_source", type=str2bool, default=True, help="Whether DIFFormer fuses the initial features")
+    p.add_argument("--gt_use_act", type=str2bool, default=True, help="Whether GT models apply activation after each layer")
+    p.add_argument("--gt_aggregate", type=str, default="add", help="SGFormer aggregation mode: add | cat")
     p.add_argument("--gt_kernel", type=str, default="simple", help="DIFFormer kernel: simple | sigmoid")
     p.add_argument("--gt_kernel_trans", type=str, default="softmax", help="NodeFormer kernel_trans: softmax | relu")
-    p.add_argument("--gt_use_gumbel", type=str2bool, default=True, help="NodeFormer 训练时是否使用 Gumbel")
-    p.add_argument("--gt_nb_gumbel_sample", type=int, default=10, help="NodeFormer Gumbel 采样数")
-    p.add_argument("--gt_nb_random_features", type=int, default=30, help="NodeFormer 随机特征数")
-    p.add_argument("--gt_rb_order", type=int, default=2, help="NodeFormer relational bias 阶数")
-    p.add_argument("--gt_rb_trans", type=str, default="sigmoid", help="NodeFormer relational bias 变换")
-    p.add_argument("--gt_use_edge_loss", type=str2bool, default=True, help="NodeFormer 是否启用 edge loss")
-    p.add_argument("--gt_edge_loss_weight", type=float, default=0.1, help="NodeFormer edge loss 权重")
-    p.add_argument("--gt_projection_matrix_type", type=str, default="a", help="NodeFormer 投影矩阵类型；none 表示关闭")
+    p.add_argument("--gt_use_gumbel", type=str2bool, default=True, help="Whether NodeFormer uses Gumbel during training")
+    p.add_argument("--gt_nb_gumbel_sample", type=int, default=10, help="Number of NodeFormer Gumbel samples")
+    p.add_argument("--gt_nb_random_features", type=int, default=30, help="Number of NodeFormer random features")
+    p.add_argument("--gt_rb_order", type=int, default=2, help="NodeFormer relational-bias order")
+    p.add_argument("--gt_rb_trans", type=str, default="sigmoid", help="NodeFormer relational-bias transform")
+    p.add_argument("--gt_use_edge_loss", type=str2bool, default=True, help="Whether NodeFormer enables edge loss")
+    p.add_argument("--gt_edge_loss_weight", type=float, default=0.1, help="NodeFormer edge-loss weight")
+    p.add_argument("--gt_projection_matrix_type", type=str, default="a", help="NodeFormer projection-matrix type; none disables it")
     p.add_argument("--gt_alpha", type=float, default=0.5, help="DIFFormer residual alpha")
-    p.add_argument("--gt_layer_norm", type=str2bool, default=False, help="GT 模型是否用 layer norm")
-    p.add_argument("--gt_batch_norm", type=str2bool, default=False, help="GT 模型是否用 batch norm")
-    p.add_argument("--gt_tau", type=float, default=0.25, help="NodeFormer / kernelized attention 温度")
-    p.add_argument("--no_save", action="store_true", help="不保存 metrics 与 checkpoint")
+    p.add_argument("--gt_layer_norm", type=str2bool, default=False, help="Whether GT models use layer norm")
+    p.add_argument("--gt_batch_norm", type=str2bool, default=False, help="Whether GT models use batch norm")
+    p.add_argument("--gt_tau", type=float, default=0.25, help="NodeFormer / kernelized attention temperature")
+    p.add_argument("--no_save", action="store_true", help="Do not save metrics or checkpoint")
     return p.parse_args()
 
 
@@ -392,6 +446,11 @@ def run_gnn(args: argparse.Namespace | None = None) -> float:
         args = parse_args()
 
     set_seed(args.seed)
+    if args.patience < 0:
+        raise ValueError("--patience must be >= 0")
+    if args.min_delta < 0:
+        raise ValueError("--min_delta must be >= 0")
+
     device = resolve_device(args.device, args.gpu)
     print(f"device={device}")
 
@@ -410,16 +469,16 @@ def run_gnn(args: argparse.Namespace | None = None) -> float:
 
     use_mini_batch_requested = args.batch_size > 0
     model_name = args.model.lower()
-    if model_name in GT_MODELS and use_mini_batch_requested:
+    if model_name in FULL_GRAPH_ONLY_MODELS and use_mini_batch_requested:
         print(
-            f"警告: {args.model} 当前按 OpenGT 风格仅支持全图训练；"
-            "已忽略 --batch_size，改用全图训练。"
+            f"Warning: {args.model} currently supports only full-graph training "
+            "in the OpenGT-style implementation; ignoring --batch_size and using full-graph training."
         )
         use_mini_batch_requested = False
     need_cpu_copy = use_mini_batch_requested and _neighbor_sampling_backend_available()
     if need_cpu_copy:
-        # Data.to() 会原地修改对象；NeighborLoader 用 CPU 图，须在 to(device) 前 clone
-        data_cpu = info.data.clone()
+        # NeighborLoader slices every attribute; text/list metadata in LLaGA Data is not sampler-friendly.
+        data_cpu = clone_node_classification_tensors(info.data)
     else:
         data_cpu = None
     data = info.data.to(device)
@@ -442,16 +501,20 @@ def run_gnn(args: argparse.Namespace | None = None) -> float:
         weight_decay=args.weight_decay,
     )
 
-    best_val = 0.0
+    best_val = float("-inf")
     best_state = None
     test_acc_at_best = 0.0
+    best_epoch = 0
+    stopped_epoch = None
+    epochs_without_improvement = 0
+    epochs_ran = 0
 
     use_mini_batch = use_mini_batch_requested and _neighbor_sampling_backend_available()
     train_loader = None
     if use_mini_batch_requested and not use_mini_batch:
         print(
-            "未安装 torch-sparse 或 pyg-lib，无法使用 NeighborLoader；"
-            "已忽略 --batch_size，改用全图训练。可: pip install torch-sparse 或 pyg-lib"
+            "torch-sparse or pyg-lib is not installed, so NeighborLoader cannot be used; "
+            "ignoring --batch_size and using full-graph training. Try: pip install torch-sparse or pyg-lib"
         )
 
     if use_mini_batch:
@@ -474,6 +537,7 @@ def run_gnn(args: argparse.Namespace | None = None) -> float:
         print("full-graph training (batch_size=0)")
 
     for epoch in range(1, args.epochs + 1):
+        epochs_ran = epoch
         model.train()
         if use_mini_batch:
             total_loss = 0.0
@@ -509,10 +573,14 @@ def run_gnn(args: argparse.Namespace | None = None) -> float:
             val_acc = accuracy(logits, data.y, data.val_mask)
             test_acc = accuracy(logits, data.y, data.test_mask)
 
-        if val_acc > best_val:
+        if val_acc > best_val + args.min_delta:
             best_val = val_acc
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             test_acc_at_best = test_acc
+            best_epoch = epoch
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
 
         if epoch % 10 == 0 or epoch == 1:
             train_acc = accuracy(logits, data.y, data.train_mask)
@@ -520,6 +588,15 @@ def run_gnn(args: argparse.Namespace | None = None) -> float:
                 f"Epoch {epoch:03d} | loss {loss_item:.4f} | "
                 f"train {train_acc:.4f} | val {val_acc:.4f} | test {test_acc:.4f}"
             )
+
+        if args.patience > 0 and epochs_without_improvement >= args.patience:
+            stopped_epoch = epoch
+            print(
+                f"Early stopping at epoch {epoch}: val_acc did not improve by "
+                f"at least {args.min_delta:g} for {args.patience} consecutive epochs. "
+                f"Best epoch={best_epoch}, best_val_acc={best_val:.4f}."
+            )
+            break
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -533,6 +610,7 @@ def run_gnn(args: argparse.Namespace | None = None) -> float:
     print(f"data_source={info.source}")
     print(
         f"Dataset={args.dataset} | model={args.model} | "
+        f"best_epoch={best_epoch} | epochs_ran={epochs_ran} | "
         f"best_val_acc={best_val:.4f} | test@best_val={test_acc_at_best:.4f} | "
         f"final_test_acc={final_test:.4f}"
     )
@@ -547,6 +625,9 @@ def run_gnn(args: argparse.Namespace | None = None) -> float:
             test_acc_at_best,
             final_test,
             best_state,
+            best_epoch,
+            stopped_epoch,
+            epochs_ran,
         )
         print(f"Saved results to: {run_dir}")
 

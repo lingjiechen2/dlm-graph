@@ -14,7 +14,7 @@ Not copied:
 
 # Results
 Cora dataset: 
-| 排名 | 模型 | 最佳 test acc | 对应 val acc | lr | layers | best epoch |
+| Rank | Model | Best test acc | Corresponding val acc | lr | layers | best epoch |
 |---:|---|---:|---:|---:|---:|---:|
 | 1 | GCN | 89.48% | 89.85% | 1e-4 | 3 | 359 |
 | 2 | GAT | 88.93% | 90.04% | 5e-4 | 3 | 40 |
@@ -29,7 +29,7 @@ Cora dataset:
 * 10: GIN | 0.8635 | 0.8893 | 
 
 Pubmed dataset:
-| 排名 | 模型 | 最佳 test acc | 对应 val acc | lr | layers | best epoch |
+| Rank | Model | Best test acc | Corresponding val acc | lr | layers | best epoch |
 |---:|---|---:|---:|---:|---:|---:|
 | 1 | MixHop | 90.04% | 89.55% | 1e-3 | 3 | 87 |
 | 2 | SAGE | 89.68% | 88.28% | 5e-4 | 4 | 39 |
@@ -45,7 +45,7 @@ Pubmed dataset:
 
 
 ## Supported Models
-我们的改进比较偏transformer设计，所以增加了一下graph transformer的代表性架构的对比（best in pubmed ~90%）。
+Because our improvements lean toward transformer-style designs, this adds comparisons with representative graph transformer architectures (best on PubMed is around 90%).
 - `gcn`
 - `sage`
 - `gat`

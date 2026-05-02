@@ -1,5 +1,5 @@
 torch>=2.0
 torch-geometric>=2.3
-# 可选：--batch_size>0 的 NeighborLoader 需要其一
+# Optional: NeighborLoader with --batch_size>0 requires one of these.
 # torch-sparse
 # pyg-lib
