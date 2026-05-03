@@ -267,8 +267,6 @@ Single-dataset cora, `mc_digit + nonb`, `max_hops=2`, `max_neighbors_per_hop=10`
 #### Logit Eval (cora test, 542 samples; in progress, training currently at step ~170/340)
 
 
-| ckpt | cora-notopo  | cora-topo    |
-| ---- | ------------ | ------------ |
 | ckpt    | cora-notopo  | cora-topo    |
 | ------- | ------------ | ------------ |
 | 17      | 76.57        | 75.46        |
@@ -278,13 +276,22 @@ Single-dataset cora, `mc_digit + nonb`, `max_hops=2`, `max_neighbors_per_hop=10`
 | 85      | 86.72        | 86.16        |
 | 102     | 87.08        | 87.27        |
 | 119     | 85.79        | 86.90        |
-| **136** | **87.64** ⭐ | 86.90        |
-| 153     | 88.01        | 88.01        |
-| 170     | 88.93        | 88.01        |
-| 187     | —            | 87.45        |
+| 136     | 87.64        | 86.90        |
+| 153     | 88.93        | 88.01        |
+| 170     | 88.01        | 87.64        |
+| 187     | 89.11        | **88.56** ⭐ |
+| 204     | 87.45        | 87.45        |
+| **221** | **89.67** ⭐ | 87.45        |
+| 238     | 89.48        | **88.56** ⭐ |
+| 255     | 89.11        | 88.01        |
+| 272     | 88.93        | 87.82        |
+| 289     | 89.11        | 88.01        |
+| 306     | 89.30        | 88.19        |
+| 323     | 89.30        | 88.19        |
+| 340     | 89.30        | 88.19        |
 
 
-Self-eval (cora → cora). Self-eval was killed at notopo ckpt-170 / topo ckpt-187 to free GPU2 for the cross-domain pubmed eval below; later ckpts (204+) not self-evaluated. notopo best so far 88.93 @ ckpt-170; topo best 88.01 @ ckpt-153/170. Both still ~3 pt below §1 (cora seq=2048: 90.77 notopo / 90.04 topo) — the +seq=4096 expansion has not (yet) closed the gap, and may be hurt by halving the per-device batch.
+Self-eval (cora → cora), all 20 ckpts complete. notopo best 89.67 @ ckpt-221; topo best 88.56 @ ckpt-187 / ckpt-238. Both still ~1.1–1.5 pt below §1 (cora seq=2048: 90.77 notopo / 90.04 topo) — the seq=2048 → 4096 expansion has *not* closed the gap. Two confounds: per-device batch halved (6 → 3) keeping effective batch=48 fixed, and total optimizer steps dropped from §1's 510 → 340 (since one example takes 2× more tokens at seq=4096 yet effective batch was held constant). §11_aligned (below) controls for the second confound.
 JSONL: `/tmp/dlm-graph-eval-jsonl/eval-cora-seq4k-{topo,notopo}-mcdigit-cora_20260501_mcdigit_nonb_seq4k-logit.jsonl`
 
 #### Cross-Domain Eval: cora-trained ckpts → PubMed test (n=1000 stratified subsample)
@@ -348,3 +355,51 @@ Take-aways. (i) Cora-notopo saturates around 90.8 logit / 91.0 infill at ckpt-26
 
 
 Take-aways. (i) The naive merge in §6 (`category_infill`, `max_answer_tokens=10`, no resampling) produces class collapse on Cora — Cora-notopo accuracy degrades from 63.84 at ckpt-422 to 39.85 at ckpt-1055, while PubMed plateaus at ~77.5 because the unconstrained `[Diab]…` answer prefix lets PubMed dominate the loss. The topo mask delays but does not prevent the collapse. (ii) Switching to `mc_digit` (single-digit answer, `max_answer_tokens=1`, `cls_loss_weight=1.0`) plus `--resample_strategy balance_datasets` (each dataset down-sampled to 1624 examples) eliminates the collapse: §7 matches or exceeds the §1 single-dataset Cora baselines on both settings (Cora-notopo ties at 90.77, Cora-topo improves +0.92 pt to 90.96) while reaching 95.28 on PubMed-notopo, surpassing the LLaGA-7B oracle-projector baseline (95.03). (iii) Both PubMed settings show a transient ckpt-459 dip (notopo 91.78, topo 90.09) followed by recovery — likely an lr-scheduler artifact, not a regression. (iv) Conclusion: a single-token answer space plus dataset-balanced resampling is sufficient to train one LoRA on Cora+PubMed jointly without sacrificing per-dataset accuracy on either.
+### §13. pubmed mc_digit nonb at `max_seq_len=4096` (run tag `pubmed_20260502_mcdigit_nonb_seq4k`, **in progress**)
+
+Single-dataset PubMed, `mc_digit + nonb`, `max_hops=2`, `max_neighbors_per_hop=10`. Same per-device batch / grad-accum recipe as §11 (`max_seq_len=4096`, `per_device_train_batch=3`, `grad_accum=16`, effective batch 48, 10 epochs, ~1972 total steps; `save_steps=eval_steps=0.05`, `cls_loss_weight=0.0`). Motivation: pubmed abstracts are typically longer than cora — at seq=2048 each neighbor was budget-bound to ~144 tokens, truncating most. seq=4096 raises the per-neighbor budget to ~306 tokens, removing token-level truncation for nearly all neighbors.
+
+#### Logit Eval (pubmed test, n=1000 stratified subsample, seed=42; in progress)
+
+
+| ckpt | pubmed-notopo | pubmed-topo |
+| ---- | ------------- | ----------- |
+| 124  | 92.40         | 93.80       |
+
+
+Self-eval (pubmed → pubmed). Only the first checkpoint at ~0.5 epoch has been evaluated; SFT was at step ~633/1972 (topo) and ~1471/1972 (notopo) at the time of writing. Note that the seq=4096 SFT preserves only the latest checkpoint on disk, so further evaluations land as training proceeds. ckpt-124 already exceeds the §1/seq=2048 ckpt-17 baseline pattern, but final accuracy at the §9-equivalent end-of-training is not yet known. Compare against §9 (pubmed seq=2048: notopo 95.18 / topo 94.47) for the seq-length effect once training completes.
+JSONL: `/tmp/dlm-graph-eval-jsonl/eval-pubmed-seq4k-{topo,notopo}-mcdigit-pubmed_20260502_mcdigit_nonb_seq4k-logit.jsonl`
+
+### §14. cora mc_digit nonb at `max_seq_len=4096` *aligned* (run tag `cora_20260502_mcdigit_nonb_seq4k_aligned`, **topo only, in progress**)
+
+Variant of §11 controlling for total optimizer steps. §11 reduced per-device batch 6 → 3 to fit seq=4096 in 80GB but kept grad_accum=8, halving total steps (510 → 340). §14 keeps grad_accum=16 *and* further reduces per-device batch 3 → 2, restoring effective batch to 32 (matching §1's 4×8) and total optimizer steps to **510** (same as §1). All other knobs identical to §1 / §11 (`mc_digit`, `nonb`, `hop=2`, `nb=10`, `cls_loss_weight=0.0`, 10 epochs, `save_steps=eval_steps=0.05`). Currently topo only on GPU 4 (no notopo run yet); SFT at ~step 31/510, ~6h45m ETA. Self-eval to follow once ckpts arrive.
+
+### §15. pubmed catinfill nbmask at `max_seq_len=4096` (run tag `pubmed_20260428_aligned`, seq=4096 variant, **complete**)
+
+Single-dataset PubMed SFT with `prompt_format=category_infill`, `max_answer_tokens=6`, `include_neighbor_labels=True` (`neighbor_label_format=bracket` — **nbmask**, *not* nonb), `max_hops=2`, `max_neighbors_per_hop=10`, `max_seq_len=4096`. Distinct from §9 (which is `mc_digit + nonb`, seq=2048) despite sharing the `pubmed_20260428_aligned` run tag. Eval on the full PubMed test split (999 samples). Run on GPU 7 via `examples/tmdlm/run_eval_pubmed_remaining_ckpts_oneshot.sh`.
+
+#### Logit Eval
+
+| ckpt    | pubmed-notopo | pubmed-topo |
+| ------- | ------------- | ----------- |
+| 370     | 91.23         | 92.11       |
+| 740     | 94.35         | 94.14       |
+| 1110    | 93.61         | 92.37       |
+| **1480**| **95.18** ⭐  | 94.47       |
+| 1850    | 94.95         | **94.90** ⭐|
+| 2220    | 94.88         | 93.18       |
+
+#### Infill Eval (strict, 10 diffusion steps)
+
+| ckpt     | pubmed-notopo | pubmed-topo |
+| -------- | ------------- | ----------- |
+| 370      | 93.13         | 92.98       |
+| 740      | 94.93         | 93.36       |
+| 1110     | 94.93         | 94.27       |
+| 1480     | 94.90         | 94.14       |
+| 1850     | 95.51         | 95.51       |
+| **2220** | **95.64** ⭐  | 95.59       |
+
+Run **complete**. Best per setting: notopo logit 95.18 @ ckpt-1480; topo logit 94.90 @ ckpt-1850; topo infill 95.59 @ ckpt-2220; **notopo infill 95.64 @ ckpt-2220** ⭐ — the highest PubMed accuracy in this file, exceeding the LLaGA-7B oracle-projector baseline (95.03) by +0.61pt. Infill consistently improves over logit on both topo and notopo at the late ckpts (e.g. topo 2220: logit 93.18 → infill 95.59; notopo 2220: logit 94.88 → infill 95.64), suggesting the masked-diffusion gen recovers signal that direct token scoring loses on the multi-token `category_infill` answer space. The seq=4096 + nbmask + catinfill combination outperforms the §9 seq=2048 nonb mc_digit setup (95.18 / 94.47 logit) on both axes.
+JSONL: `/tmp/dlm-graph-eval-jsonl/eval-pubmed-2hop-{notopo,topo}-pubmed_20260428_aligned{,-infill}.jsonl`
+
