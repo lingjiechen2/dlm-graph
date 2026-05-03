@@ -640,28 +640,28 @@ def _build_node_sample_category(
         The category of this paper is: <class_name>
 
     The class name tokens are the answer (masked during eval).
-    We reserve a fixed answer window of ``max_answer_tokens`` for evaluation
-    compatibility, but only supervise the real class-name token span:
-      - real answer tokens: labels != -100
-      - remaining reserved slots: mask-token placeholders with labels == -100
+    The reserved fixed window of ``max_answer_tokens`` is filled as
+    [real class-name tokens] + [eos_token_id × (max_answer_tokens - answer_len)].
+    The entire window is supervised (labels = input_ids on those positions),
+    teaching the model to emit EOS after short class names.
     """
 
     def _tok(text: str) -> list[int]:
         return tokenizer.encode(text, add_special_tokens=False)
 
     # --- Build answer tokens ---
-    # Keep a fixed reserved answer window for eval (so evaluator can mask a
-    # uniform window without knowing GT length), but supervise only the real
-    # class-name tokens. The trailing reserved slots use pad_token_id and the
-    # collator zeros their attention so the model never "sees" them — this
-    # avoids encoding GT class length via the trailing-mask count.
+    # Fixed reserved answer window: real class-name tokens followed by
+    # eos_token_id padding. The EOS slots are supervised (labels = eos_id) and
+    # remain visible to attention, so the model learns to emit EOS after short
+    # class names — matching LLaDA's original SFT recipe (examples/llada/sft.py
+    # uses label_pad_token_id = pad_token_id with NoAttentionMaskWrapper).
     class_name = class_names[cls_label]
     answer_tokens = _tok(class_name)[:max_answer_tokens]
     answer_len = len(answer_tokens)
-    pad_id = tokenizer.pad_token_id
-    assert pad_id is not None, "tokenizer must have pad_token_id"
+    eos_id = tokenizer.eos_token_id
+    assert eos_id is not None, "tokenizer must have eos_token_id"
     while len(answer_tokens) < max_answer_tokens:
-        answer_tokens.append(pad_id)
+        answer_tokens.append(eos_id)
 
     # --- Tokenize target section ---
     target_prefix = _tok("Paper: ")
@@ -808,19 +808,17 @@ def _build_node_sample_category(
             tb_end = len(target_prefix) + len(target_body)
         for pos in range(tb_start, min(tb_end, len(labels))):
             labels[pos] = input_ids[pos]
-    # Answer tokens in labels: supervise only real class-name tokens.
-    # Reserved tail slots remain -100 (not trained).
-    for j in range(answer_len):
+    # Answer tokens in labels: supervise the entire fixed window
+    # (real class-name tokens + trailing EOS slots). EOS supervision teaches
+    # the model to terminate after short class names; this matches LLaDA's
+    # original SFT recipe.
+    for j in range(max_answer_tokens):
         pos = label_token_pos + j
         if pos < len(labels):
             labels[pos] = input_ids[pos]
     for span_start, span_end, orig_toks in nb_label_spans_abs:
         for j, pos in enumerate(range(span_start, min(span_end, len(labels)))):
             labels[pos] = orig_toks[j] if orig_toks is not None else input_ids[pos]
-    # Reserved-tail pad span (positions filled with pad_token_id whose attention
-    # the collator must zero out). Empty when answer_len == max_answer_tokens.
-    answer_pad_start = label_token_pos + answer_len
-    answer_pad_end = label_token_pos + len(answer_tokens)
     return {
         "input_ids": input_ids,
         "labels": labels,
@@ -829,8 +827,6 @@ def _build_node_sample_category(
         "cls_label": cls_label,
         "label_token_pos": label_token_pos,
         "answer_len": answer_len,
-        "answer_pad_start": answer_pad_start,
-        "answer_pad_end": answer_pad_end,
     }
 
 
