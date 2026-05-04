@@ -28,93 +28,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 import torch
-import torch.nn.functional as F
 import transformers
 from tqdm import tqdm
 
 import dllm
 from dllm.data.graph import load_tag_dataset, get_class_token_ids
+from dllm.pipelines.tmdlm.eval_utils import score_classes_from_logits
 from dllm.pipelines.tmdlm.utils import GraphDataCollator
 
 logger = dllm.utils.get_default_logger(__name__)
-
-
-def _valid_class_token_lists(class_token_ids, tokenizer):
-    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
-    return [[tok for tok in seq if tok != pad_id] for seq in class_token_ids]
-
-
-def _shared_prefix_len(token_lists):
-    if not token_lists:
-        return 0
-    prefix_len = 0
-    min_len = min(len(seq) for seq in token_lists)
-    while prefix_len < min_len:
-        tok = token_lists[0][prefix_len]
-        if all(seq[prefix_len] == tok for seq in token_lists[1:]):
-            prefix_len += 1
-        else:
-            break
-    return prefix_len
-
-
-def _predict_pubmed_hierarchical(
-    log_probs,
-    label_starts,
-    class_names,
-    class_token_ids_tensor,
-    tokenizer,
-):
-    """Hierarchical PubMed scorer.
-
-    Treat the shared prefix "Diabetes Mellitus" as prompt context. First compare
-    the next token for Experimental (",") against the Type branch ("Type"). If
-    Type wins, compare the following token between Type 1 and Type 2.
-    """
-    device = log_probs.device
-    token_lists = _valid_class_token_lists(class_token_ids_tensor.tolist(), tokenizer)
-    name_to_idx = {name: idx for idx, name in enumerate(class_names)}
-    exp_idx = name_to_idx["Diabetes Mellitus, Experimental"]
-    type1_idx = name_to_idx["Diabetes Mellitus Type 1"]
-    type2_idx = name_to_idx["Diabetes Mellitus Type 2"]
-
-    shared_len = _shared_prefix_len(token_lists)
-    type_shared_len = _shared_prefix_len([token_lists[type1_idx], token_lists[type2_idx]])
-
-    exp_branch_tok = token_lists[exp_idx][shared_len]
-    type_branch_tok = token_lists[type1_idx][shared_len]
-    type1_leaf_tok = token_lists[type1_idx][type_shared_len]
-    type2_leaf_tok = token_lists[type2_idx][type_shared_len]
-
-    branch_pos = shared_len
-    leaf_pos = type_shared_len
-
-    branch_abs_pos = label_starts + branch_pos
-    branch_scores = log_probs[
-        torch.arange(log_probs.shape[0], device=device),
-        branch_abs_pos,
-        :,
-    ][:, [exp_branch_tok, type_branch_tok]]
-    choose_exp = branch_scores[:, 0] >= branch_scores[:, 1]
-
-    preds = torch.full((log_probs.shape[0],), type1_idx, device=device, dtype=torch.long)
-    preds[choose_exp] = exp_idx
-
-    if (~choose_exp).any():
-        type_rows = (~choose_exp).nonzero(as_tuple=False).squeeze(-1)
-        leaf_abs_pos = label_starts[type_rows] + leaf_pos
-        leaf_scores = log_probs[
-            type_rows,
-            leaf_abs_pos,
-            :,
-        ][:, [type1_leaf_tok, type2_leaf_tok]]
-        preds[type_rows] = torch.where(
-            leaf_scores[:, 0] >= leaf_scores[:, 1],
-            torch.full_like(type_rows, type1_idx),
-            torch.full_like(type_rows, type2_idx),
-        )
-
-    return preds
 
 
 @dataclass
@@ -297,62 +219,16 @@ def evaluate_layer0(
         outputs = model(**forward_kwargs)
         logits = outputs.logits  # [b, l, V]
 
-        if max_answer_tokens == 1:
-            # Single-token: restricted argmax over class token IDs
-            label_logits = logits[
-                torch.arange(b, device=device).unsqueeze(1),
-                label_indices,
-            ].squeeze(
-                1
-            )  # [b, V]
-            restricted_logits = label_logits[:, class_token_ids_tensor]  # [b, K]
-            preds = restricted_logits.argmax(dim=-1)  # [b]
-        else:
-            # Multi-token: sum log-probs across answer positions per class
-            # label_indices: [b, max_ans_len]
-            # class_token_ids_tensor: [K, max_ans_len]
-            ans_len = label_indices.shape[1]
-            log_probs = F.log_softmax(logits, dim=-1)  # [b, l, V]
-
-            # Gather log-probs at answer positions: [b, max_ans_len, V]
-            pos_expanded = label_indices.unsqueeze(-1).expand(-1, -1, logits.shape[-1])
-            ans_log_probs = log_probs.gather(1, pos_expanded)  # [b, max_ans_len, V]
-
-            if dataset_name == "pubmed" and prompt_format == "category_infill":
-                preds = _predict_pubmed_hierarchical(
-                    log_probs=log_probs,
-                    label_starts=label_indices[:, 0],
-                    class_names=class_names,
-                    class_token_ids_tensor=class_token_ids_tensor,
-                    tokenizer=tokenizer,
-                )
-            else:
-                # For each class k, gather log-probs for its tokens: [b, K]
-                # class_token_ids_tensor: [K, max_ans_len] -> expand to [b, K, max_ans_len]
-                K = class_token_ids_tensor.shape[0]
-                cls_ids = class_token_ids_tensor.unsqueeze(0).expand(
-                    b, -1, -1
-                )  # [b, K, max_ans_len]
-
-                # ans_log_probs: [b, max_ans_len, V] -> for each position, gather the K class tokens
-                scores = torch.zeros(b, K, device=device)
-                # Build validity mask: position j is valid if token != pad_token_id
-                pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
-                cls_valid = class_token_ids_tensor != pad_id  # [K, max_ans_len]
-
-                for j in range(ans_len):
-                    pos_logprobs = ans_log_probs[:, j, :]  # [b, V]
-                    cls_tokens_j = cls_ids[:, :, j]  # [b, K]
-                    token_scores = pos_logprobs.gather(1, cls_tokens_j)  # [b, K]
-                    # Only add score if this position is valid for the class
-                    valid_j = cls_valid[:, j].unsqueeze(0).expand(b, -1)  # [b, K]
-                    scores += token_scores * valid_j.float()
-
-                # Normalize by number of valid tokens per class (mean log-prob)
-                cls_lengths = cls_valid.sum(dim=1).float().clamp(min=1)  # [K]
-                scores = scores / cls_lengths.unsqueeze(0)  # [b, K]
-
-                preds = scores.argmax(dim=-1)  # [b]
+        pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+        preds = score_classes_from_logits(
+            logits=logits,
+            label_indices=label_indices,
+            class_token_ids_tensor=class_token_ids_tensor,
+            pad_id=pad_id,
+            dataset_name=dataset_name,
+            prompt_format=prompt_format,
+            class_names=class_names,
+        )
 
         all_predictions.extend(preds.cpu().tolist())
 
