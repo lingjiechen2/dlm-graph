@@ -359,47 +359,37 @@ Take-aways. (i) The naive merge in §6 (`category_infill`, `max_answer_tokens=10
 
 Single-dataset PubMed, `mc_digit + nonb`, `max_hops=2`, `max_neighbors_per_hop=10`. Same per-device batch / grad-accum recipe as §11 (`max_seq_len=4096`, `per_device_train_batch=3`, `grad_accum=16`, effective batch 48, 10 epochs, ~1972 total steps; `save_steps=eval_steps=0.05`, `cls_loss_weight=0.0`). Motivation: pubmed abstracts are typically longer than cora — at seq=2048 each neighbor was budget-bound to ~144 tokens, truncating most. seq=4096 raises the per-neighbor budget to ~306 tokens, removing token-level truncation for nearly all neighbors.
 
-#### Logit Eval (pubmed test, n=1000 stratified subsample, seed=42; in progress)
+#### Logit Eval (pubmed test, full split n=3944; in progress)
 
 
 | ckpt | pubmed-notopo | pubmed-topo |
 | ---- | ------------- | ----------- |
 | 124  | 92.40         | 93.80       |
+| 248  | 95.40         | 93.99       |
+| 372  | 94.80         | **95.06**   |
 
 
-Self-eval (pubmed → pubmed). Only the first checkpoint at ~0.5 epoch has been evaluated; SFT was at step ~633/1972 (topo) and ~1471/1972 (notopo) at the time of writing. Note that the seq=4096 SFT preserves only the latest checkpoint on disk, so further evaluations land as training proceeds. ckpt-124 already exceeds the §1/seq=2048 ckpt-17 baseline pattern, but final accuracy at the §9-equivalent end-of-training is not yet known. Compare against §9 (pubmed seq=2048: notopo 95.18 / topo 94.47) for the seq-length effect once training completes.
+Self-eval (pubmed → pubmed). Three checkpoints evaluated to date (124, 248, 372); 496 in progress on both GPUs and 620/744/868 queued — SFT itself is at step 814/2470 (topo, GPU 2) and 972/2470 (notopo, GPU 5) and still running. Topo trends monotonically up (93.80 → 93.99 → 95.06), so further gains likely. Notopo peaks at ckpt-248 (95.40) and dips slightly at 372 (94.80) — possible early overfitting, will reassess after 496+. Both seq=4096 settings already match or beat §9 (pubmed seq=2048: notopo 95.18 / topo 94.47), confirming the seq-length lift on PubMed.
 JSONL: `/tmp/dlm-graph-eval-jsonl/eval-pubmed-seq4k-{topo,notopo}-mcdigit-pubmed_20260502_mcdigit_nonb_seq4k-logit.jsonl`
 
 ### §14. cora mc_digit nonb at `max_seq_len=4096` *aligned* (run tag `cora_20260502_mcdigit_nonb_seq4k_aligned`, **topo only, in progress**)
 
 Variant of §11 controlling for total optimizer steps. §11 reduced per-device batch 6 → 3 to fit seq=4096 in 80GB but kept grad_accum=8, halving total steps (510 → 340). §14 keeps grad_accum=16 *and* further reduces per-device batch 3 → 2, restoring effective batch to 32 (matching §1's 4×8) and total optimizer steps to **510** (same as §1). All other knobs identical to §1 / §11 (`mc_digit`, `nonb`, `hop=2`, `nb=10`, `cls_loss_weight=0.0`, 10 epochs, `save_steps=eval_steps=0.05`). Currently topo only on GPU 4 (no notopo run yet); SFT at ~step 31/510, ~6h45m ETA. Self-eval to follow once ckpts arrive.
 
-### §15. pubmed catinfill nbmask at `max_seq_len=4096` (run tag `pubmed_20260428_aligned`, seq=4096 variant, **complete**)
+### §15. Dataset graph statistics — neighbor density across cora / pubmed / ogbn-arxiv / ogbn-products
 
-Single-dataset PubMed SFT with `prompt_format=category_infill`, `max_answer_tokens=6`, `include_neighbor_labels=True` (`neighbor_label_format=bracket` — **nbmask**, *not* nonb), `max_hops=2`, `max_neighbors_per_hop=10`, `max_seq_len=4096`. Distinct from §9 (which is `mc_digit + nonb`, seq=2048) despite sharing the `pubmed_20260428_aligned` run tag. Eval on the full PubMed test split (999 samples). Run on GPU 7 via `examples/tmdlm/run_eval_pubmed_remaining_ckpts_oneshot.sh`.
+To contextualize the topology-mask experiments and the seq-length budget analyses, we measured the per-node neighbor density on each dataset's train split. For each train node we recorded both (i) the raw 1-hop degree in the loader's full adjacency dict (no split filtering — neighbors may span train/val/test) and (ii) the number of neighbors actually fed to the model after `_sample_khop_neighbors(max_neighbors_per_hop=10, max_hops=2)` caps each hop at 10 (so the per-node total is bounded by 20). All numbers are computed on a 2000-node random sample (or the full split when smaller).
 
-#### Logit Eval
+| dataset       | train\_size | raw 1-hop deg (mean / median / p90 / max) | % deg = 0 | sampled total NBs (mean / median) | % NBs = 0 | % NBs = 20 (cap) |
+| ------------- | ----------- | ----------------------------------------- | --------- | --------------------------------- | --------- | ---------------- |
+| cora          | 1,624       | 4.0 / 3 / 7 / 168                         | 0.0%      | 11.3 / 13                         | 0.0%      | 4.8%             |
+| pubmed        | 11,830      | 4.6 / 2 / 13 / 171                        | 0.0%      | 12.6 / 12                         | 0.0%      | 13.2%            |
+| ogbn-arxiv    | 90,941      | 14.1 / 5 / 25 / 1251                      | 0.0%      | 14.6 / 15                         | 0.0%      | 29.9%            |
+| ogbn-products | 14,708      | 1.5 / 0 / 5 / 15                          | **74.4%** | **2.3 / 0**                       | **74.4%** | 3.5%             |
 
-| ckpt    | pubmed-notopo | pubmed-topo |
-| ------- | ------------- | ----------- |
-| 370     | 91.23         | 92.11       |
-| 740     | 94.35         | 94.14       |
-| 1110    | 93.61         | 92.37       |
-| **1480**| **95.18** ⭐  | 94.47       |
-| 1850    | 94.95         | **94.90** ⭐|
-| 2220    | 94.88         | 93.18       |
+Three observations follow. First, **ogbn-products is qualitatively different from the other three**: 74.4% of its training nodes are isolated in the loader's adjacency, so the sampler returns an empty neighbor list for nearly three quarters of the training set. This is a property of the TAPE-products subset rather than the ingestion pipeline — `dllm/data/datasets/ogbn_products.py` builds `adj` directly from `data.adj_t.storage._row/_col` of the saved subset (no split-based filtering), and the subset preserves only edges whose endpoints both lie inside the ~54k subsampled nodes; the full OGB ogbn-products graph (2.4M nodes, 61M edges, average degree ~50) loses most of its edges in this trimming, leaving the majority of subset nodes with zero in-subset neighbors. Topology-mask experiments on products therefore have a degenerate baseline: for 3/4 of training samples the target node *is* the entire input, and topo vs notopo are identical by construction.
 
-#### Infill Eval (strict, 10 diffusion steps)
+Second, **arxiv has by far the densest graph** (mean raw degree 14.1, max 1251) and 29.9% of its train nodes hit the 20-neighbor cap during sampling. Raising `max_neighbors_per_hop` above 10 would expose more graph signal on arxiv, whereas on cora/pubmed only 5–13% of samples saturate the cap and on products the cap is effectively irrelevant.
 
-| ckpt     | pubmed-notopo | pubmed-topo |
-| -------- | ------------- | ----------- |
-| 370      | 93.13         | 92.98       |
-| 740      | 94.93         | 93.36       |
-| 1110     | 94.93         | 94.27       |
-| 1480     | 94.90         | 94.14       |
-| 1850     | 95.51         | 95.51       |
-| **2220** | **95.64** ⭐  | 95.59       |
-
-Run **complete**. Best per setting: notopo logit 95.18 @ ckpt-1480; topo logit 94.90 @ ckpt-1850; topo infill 95.59 @ ckpt-2220; **notopo infill 95.64 @ ckpt-2220** ⭐ — the highest PubMed accuracy in this file, exceeding the LLaGA-7B oracle-projector baseline (95.03) by +0.61pt. Infill consistently improves over logit on both topo and notopo at the late ckpts (e.g. topo 2220: logit 93.18 → infill 95.59; notopo 2220: logit 94.88 → infill 95.64), suggesting the masked-diffusion gen recovers signal that direct token scoring loses on the multi-token `category_infill` answer space. The seq=4096 + nbmask + catinfill combination outperforms the §9 seq=2048 nonb mc_digit setup (95.18 / 94.47 logit) on both axes.
-JSONL: `/tmp/dlm-graph-eval-jsonl/eval-pubmed-2hop-{notopo,topo}-pubmed_20260428_aligned{,-infill}.jsonl`
+Third, **the seq-length budget analyses in §11 / §13 / §16-products are independent of this graph property**: even with seq → ∞, isolated products nodes still have no neighbors to feed in. The seq=4096 lift observed on cora and pubmed comes from preserving longer abstracts of *existing* neighbors, which products cannot benefit from for the 74% isolated subset.
 

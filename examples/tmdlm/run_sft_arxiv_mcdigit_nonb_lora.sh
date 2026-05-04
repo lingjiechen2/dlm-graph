@@ -22,9 +22,9 @@ DATASET_NAME=ogbn-arxiv
 PROMPT_FORMAT="${PROMPT_FORMAT:-mc_digit}"
 ANSWER_LABEL_STYLE="${ANSWER_LABEL_STYLE:-digit0}"
 MAX_ANSWER_TOKENS="${MAX_ANSWER_TOKENS:-2}"  # 40 classes → labels "0".."39", up to 2 tokens
-MAX_STEPS="${MAX_STEPS:-4000}"
-MAX_TRAIN_SAMPLES="${MAX_TRAIN_SAMPLES:-20000}"  # subsample arxiv train (~90k full → 20k for faster tokenize/load and ~10 epochs at bs=48)
-MAX_SEQ_LEN="${MAX_SEQ_LEN:-4096}"  # 4096 keeps per-nb tokens ~170 (vs ~66 at 2048); arxiv abstract median ~220
+MAX_STEPS="${MAX_STEPS:-1668}"  # 4 epochs at 20k subsample / eff batch 48 (= 417 steps/epoch × 4); ~71h wallclock at ~154 s/step
+MAX_TRAIN_SAMPLES="${MAX_TRAIN_SAMPLES:-20000}"  # subsample arxiv train (~90k full → 20k for faster tokenize/load)
+MAX_SEQ_LEN="${MAX_SEQ_LEN:-4096}"  # arxiv has densest graph (mean 14.6 sampled NBs); seq=4096 keeps per-nb budget ~312 tok (vs 125 at 2048), ~57% of NBs untruncated (vs 14%)
 
 BASE_MODEL="${BASE_MODEL:-GSAI-ML/LLaDA-8B-Instruct}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_ROOT}/.models}"
