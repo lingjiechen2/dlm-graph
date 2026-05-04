@@ -365,11 +365,15 @@ Single-dataset PubMed, `mc_digit + nonb`, `max_hops=2`, `max_neighbors_per_hop=1
 | ckpt | pubmed-notopo | pubmed-topo |
 | ---- | ------------- | ----------- |
 | 124  | 92.40         | 93.80       |
-| 248  | 95.40         | 93.99       |
+| 248  | **95.40**     | 93.99       |
 | 372  | 94.80         | **95.06**   |
+| 496  | 94.47         | 94.80       |
+| 620  | 95.23         | 94.57       |
+| 744  | 95.39         | —           |
+| 868  | 94.42         | —           |
 
 
-Self-eval (pubmed → pubmed). Three checkpoints evaluated to date (124, 248, 372); 496 in progress on both GPUs and 620/744/868 queued — SFT itself is at step 814/2470 (topo, GPU 2) and 972/2470 (notopo, GPU 5) and still running. Topo trends monotonically up (93.80 → 93.99 → 95.06), so further gains likely. Notopo peaks at ckpt-248 (95.40) and dips slightly at 372 (94.80) — possible early overfitting, will reassess after 496+. Both seq=4096 settings already match or beat §9 (pubmed seq=2048: notopo 95.18 / topo 94.47), confirming the seq-length lift on PubMed.
+Self-eval (pubmed → pubmed). Notopo evaluated through ckpt-868, topo through ckpt-620; topo's 744 not yet evaled (ckpt-744 on disk, eval queued). SFT is still running: topo at step 857/2470 (GPU 2), notopo at step 1002/2470 (GPU 5). Both variants now show diminishing returns past their respective peaks — **notopo peaks at ckpt-248 (95.40)**, with 744 (95.39) essentially tied and other later checkpoints (372/496/620/868) bouncing 94.42–95.23; **topo peaks at ckpt-372 (95.06)**, then drifts down to 94.57–94.80. Pattern is consistent with mild overfitting after ~15% of optimization budget. Both seq=4096 best results match or beat §9 (pubmed seq=2048: notopo 95.18 / topo 94.47), confirming the seq-length lift on PubMed.
 JSONL: `/tmp/dlm-graph-eval-jsonl/eval-pubmed-seq4k-{topo,notopo}-mcdigit-pubmed_20260502_mcdigit_nonb_seq4k-logit.jsonl`
 
 ### §14. cora mc_digit nonb at `max_seq_len=4096` *aligned* (run tag `cora_20260502_mcdigit_nonb_seq4k_aligned`, **topo only, in progress**)
