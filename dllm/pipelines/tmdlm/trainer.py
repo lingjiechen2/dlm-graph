@@ -14,11 +14,13 @@ Key difference from MDLMTrainer:
 """
 
 from dataclasses import dataclass, field
+from typing import Optional, Sequence
 
 import torch
 import transformers
 
 from dllm.core.trainers.mdlm import MDLMTrainer, MDLMConfig
+from dllm.pipelines.tmdlm.eval_utils import masked_forward_and_score
 
 
 @dataclass
@@ -58,10 +60,26 @@ class TMDLMTrainer(MDLMTrainer):
         label_token_indices [b, C]      (Optional) Positions of [LABEL] tokens in sequence.
     """
 
-    def __init__(self, args: TMDLMConfig, *pargs, **kwargs):
+    def __init__(
+        self,
+        args: TMDLMConfig,
+        *pargs,
+        eval_class_token_ids: torch.Tensor | None = None,
+        eval_class_names: list[str] | None = None,
+        eval_dataset_name: str | None = None,
+        eval_prompt_format: str = "mc_digit",
+        **kwargs,
+    ):
         super().__init__(args=args, *pargs, **kwargs)
         self.cls_loss_weight = args.cls_loss_weight
         self.ms_threshold = args.ms_threshold
+        # Eval-acc configuration. When eval_class_token_ids is provided,
+        # `evaluation_loop` switches from stochastic ELBO to deterministic
+        # answer-window masking + class scoring (matching eval_logit.py).
+        self.eval_class_token_ids = eval_class_token_ids
+        self.eval_class_names = eval_class_names
+        self.eval_dataset_name = eval_dataset_name
+        self.eval_prompt_format = eval_prompt_format
 
     def _build_attention_mask(
         self,
@@ -223,3 +241,72 @@ class TMDLMTrainer(MDLMTrainer):
             loss = loss + self.cls_loss_weight * cls_loss
 
         return (loss, outputs) if return_outputs else loss
+
+    def evaluation_loop(
+        self,
+        dataloader,
+        description: str,
+        prediction_loss_only: bool | None = None,
+        ignore_keys=None,
+        metric_key_prefix: str = "eval",
+    ):
+        """Deterministic-mask classification accuracy as the eval metric.
+
+        Falls back to the parent stochastic-ELBO loop when eval-acc kwargs
+        are not configured. When configured, mirrors eval_logit.py: mask the
+        answer window, single forward pass, score against candidate class
+        token IDs, return acc and (1 - acc) as eval_loss for HF early-stop /
+        best-checkpoint compatibility.
+        """
+        if self.eval_class_token_ids is None:
+            return super().evaluation_loop(
+                dataloader,
+                description,
+                prediction_loss_only=prediction_loss_only,
+                ignore_keys=ignore_keys,
+                metric_key_prefix=metric_key_prefix,
+            )
+
+        from transformers.trainer_utils import EvalLoopOutput
+
+        model = self._wrap_model(self.model, training=False, dataloader=dataloader)
+        model.eval()
+
+        device = next(model.parameters()).device
+        cls_ids = self.eval_class_token_ids.to(device)
+        tokenizer = self.processing_class
+
+        use_topology_mask = bool(
+            getattr(dataloader, "collate_fn", None) is not None
+            and getattr(dataloader.collate_fn, "use_topology_mask", False)
+        )
+
+        correct = 0
+        total = 0
+        for batch in dataloader:
+            preds, cls_labels = masked_forward_and_score(
+                model=model,
+                batch=batch,
+                tokenizer=tokenizer,
+                class_token_ids_tensor=cls_ids,
+                use_topology_mask=use_topology_mask,
+                dataset_name=self.eval_dataset_name,
+                prompt_format=self.eval_prompt_format,
+                class_names=self.eval_class_names,
+            )
+            correct += (preds == cls_labels).sum().item()
+            total += cls_labels.numel()
+
+        acc = float(correct) / max(total, 1)
+        metrics = {
+            f"{metric_key_prefix}_acc": acc,
+            f"{metric_key_prefix}_loss": 1.0 - acc,
+            f"{metric_key_prefix}_correct": correct,
+            f"{metric_key_prefix}_total": total,
+        }
+        return EvalLoopOutput(
+            predictions=None,
+            label_ids=None,
+            metrics=metrics,
+            num_samples=total,
+        )
