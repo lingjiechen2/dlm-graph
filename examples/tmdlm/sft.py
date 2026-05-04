@@ -25,7 +25,7 @@ import transformers
 
 import dllm
 from dllm.pipelines import tmdlm
-from dllm.data.graph import load_tag_dataset
+from dllm.data.graph import load_tag_dataset, get_class_token_ids
 
 logger = dllm.utils.get_default_logger(__name__)
 
@@ -200,6 +200,26 @@ def train():
             ds_arg, split="val", **_common_kwargs
         )
 
+    # --- Eval-acc configuration: precompute class token IDs so the trainer's
+    # evaluation_loop reports deterministic-mask classification accuracy
+    # (matching eval_logit.py) instead of stochastic ELBO loss. Only set up
+    # for single-dataset runs; merged-dataset training falls back to the
+    # parent stochastic-loss eval.
+    import torch as _torch
+    eval_class_token_ids = None
+    eval_class_names = None
+    eval_dataset_name = None
+    if isinstance(data_args.dataset_name, str) and "," not in data_args.dataset_name:
+        eval_class_names, _ids = get_class_token_ids(
+            data_args.dataset_name,
+            tokenizer,
+            max_answer_tokens=data_args.max_answer_tokens,
+            prompt_format=data_args.prompt_format,
+            answer_label_style=data_args.answer_label_style,
+        )
+        eval_class_token_ids = _torch.tensor(_ids, dtype=_torch.long)
+        eval_dataset_name = data_args.dataset_name
+
     # --- Trainer ---
     accelerate.PartialState().wait_for_everyone()
     logger.info("Start training TM-DLM on %s...", data_args.dataset_name)
@@ -216,6 +236,10 @@ def train():
             position_id_type=data_args.position_id_type,
             use_topology_mask=data_args.use_topology_mask,
         ),
+        eval_class_token_ids=eval_class_token_ids,
+        eval_class_names=eval_class_names,
+        eval_dataset_name=eval_dataset_name,
+        eval_prompt_format=data_args.prompt_format,
     )
     trainer.train()
     trainer.save_model(os.path.join(training_args.output_dir, "checkpoint-final"))
