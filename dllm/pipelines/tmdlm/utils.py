@@ -172,10 +172,15 @@ class GraphDataCollator:
 
         for i, f in enumerate(features):
             spans = f.get(spans_key, f.get("node_spans", []))
+            roles = f.get("node_roles")
             if not spans:
                 # Fallback: full attention
                 seq_len = len(f["input_ids"])
                 mask[i, :seq_len, :seq_len] = 1
+                continue
+
+            if roles is not None:
+                self._fill_lp_mask(mask[i], spans, roles)
                 continue
 
             hops = f.get("node_hops", list(range(len(spans))))
@@ -200,3 +205,39 @@ class GraphDataCollator:
                     mask[i, start:end, target_start:target_end] = 1  # target
 
         return mask
+
+    @staticmethod
+    def _fill_lp_mask(
+        sample_mask: torch.Tensor,
+        spans: list,
+        roles: list,
+    ) -> None:
+        """Populate one [L, L] mask slice with LP crossed-star semantics.
+
+        Roles ∈ {0=TARGET, 1=NBR_U, 2=NBR_V, 3=QUESTION}. Allowed (row -> col):
+            TARGET   -> TARGET, NBR_U, NBR_V, QUESTION   (everything)
+            NBR_U    -> TARGET, self                      (no NBR_V, no Q)
+            NBR_V    -> TARGET, self                      (no NBR_U, no Q)
+            QUESTION -> TARGET, self
+        Same per-token cost as the NC star (centres do the heavy work).
+        """
+        target_spans = [spans[k] for k, r in enumerate(roles) if int(r) == 0]
+        u_nbr_spans = [spans[k] for k, r in enumerate(roles) if int(r) == 1]
+        v_nbr_spans = [spans[k] for k, r in enumerate(roles) if int(r) == 2]
+        q_spans = [spans[k] for k, r in enumerate(roles) if int(r) == 3]
+
+        def _fill(rows, cols):
+            for rs, re in rows:
+                for cs, ce in cols:
+                    sample_mask[rs:re, cs:ce] = 1
+
+        _fill(target_spans, target_spans + u_nbr_spans + v_nbr_spans + q_spans)
+        _fill(u_nbr_spans, target_spans)
+        for s in u_nbr_spans:
+            sample_mask[s[0]:s[1], s[0]:s[1]] = 1
+        _fill(v_nbr_spans, target_spans)
+        for s in v_nbr_spans:
+            sample_mask[s[0]:s[1], s[0]:s[1]] = 1
+        _fill(q_spans, target_spans)
+        for s in q_spans:
+            sample_mask[s[0]:s[1], s[0]:s[1]] = 1

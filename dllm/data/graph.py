@@ -1416,3 +1416,322 @@ def get_class_token_ids(
         tokens = tokens + [0] * (max_answer_tokens - len(tokens))
         answer_token_ids.append(tokens)
     return class_names, answer_token_ids
+
+
+# ---------------------------------------------------------------------------
+# Link-prediction sample construction (yes/no answer over two node-centred
+# subgraphs in a single sequence; cross-star topology mask).
+# ---------------------------------------------------------------------------
+
+
+# Role tags written into ``node_roles`` and consumed by
+# ``GraphDataCollator._build_topology_mask`` to build the LP crossed-star mask.
+LP_ROLE_TARGET = 0   # u-text / v-text spans (both are "centres")
+LP_ROLE_NBR_U = 1    # u-side neighbour
+LP_ROLE_NBR_V = 2    # v-side neighbour
+LP_ROLE_QUESTION = 3  # trailing "Connected? Answer: <yes|no>" span
+
+
+def get_lp_yesno_token_ids(tokenizer) -> list[int]:
+    """Return single-token ids for the LP answer set in canonical order
+    [no_id, yes_id] so cls_label=0/1 maps to the correct token."""
+    no_id = tokenizer.encode(" no", add_special_tokens=False)
+    yes_id = tokenizer.encode(" yes", add_special_tokens=False)
+    if len(no_id) != 1 or len(yes_id) != 1:
+        raise RuntimeError(
+            f"Expected single-token ' no' and ' yes', got no={no_id}, yes={yes_id}"
+        )
+    return [no_id[0], yes_id[0]]
+
+
+def build_edge_sample(
+    u_text: str,
+    v_text: str,
+    u_neighbor_texts: list[str],
+    u_neighbor_hops: list[int],
+    v_neighbor_texts: list[str],
+    v_neighbor_hops: list[int],
+    cls_label: int,
+    tokenizer,
+    max_seq_len: int = 2048,
+    mask_target_text: bool = False,
+) -> dict:
+    """Build a single LP sample. ``cls_label`` ∈ {0=no, 1=yes}.
+
+    Sequence layout (all tokens are added without special tokens):
+
+        Paper A: <u_text>
+        Neighbor A1: <nb_text> ... Neighbor Ak: <nb_text>
+        Paper B: <v_text>
+        Neighbor B1: <nb_text> ... Neighbor Bk: <nb_text>
+        Do Paper A and Paper B cite each other? Answer: <yes|no>
+
+    The trailing answer is one token (' yes' / ' no').
+
+    The returned ``node_spans`` enumerate, in this order:
+        [u_text_span, u_nbr_1_span, ..., v_text_span, v_nbr_1_span, ..., q_span]
+    with the parallel ``node_roles`` list giving each span's LP role tag.
+    """
+
+    def _tok(text: str) -> list[int]:
+        return tokenizer.encode(text, add_special_tokens=False)
+
+    yesno_ids = get_lp_yesno_token_ids(tokenizer)
+    answer_token = yesno_ids[cls_label]
+
+    # Question span comes last, before the answer token.
+    q_str = "\nDo Paper A and Paper B cite each other? Answer:"
+    q_toks = _tok(q_str)
+
+    # Per-section static prefixes.
+    paper_a_prefix = _tok("Paper A: ")
+    paper_b_prefix = _tok("\nPaper B: ")
+
+    paper_a_body = _tok(u_text)
+    paper_b_body = _tok(v_text)
+
+    # Budget plan: split the leftover after fixed overhead into 4 quarters
+    # (u_text, u_nbrs, v_text, v_nbrs); per-neighbour budget then shares
+    # the per-side neighbour budget evenly.
+    fixed_overhead = (
+        len(paper_a_prefix) + len(paper_b_prefix) + len(q_toks) + 1  # +1 for answer
+    )
+    free = max(max_seq_len - fixed_overhead, 200)
+    per_quarter = free // 4
+    u_text_budget = max(per_quarter, 50)
+    v_text_budget = max(per_quarter, 50)
+    paper_a_body = paper_a_body[:u_text_budget]
+    paper_b_body = paper_b_body[:v_text_budget]
+
+    n_u_nb = len(u_neighbor_texts)
+    n_v_nb = len(v_neighbor_texts)
+    u_nb_budget_total = per_quarter
+    v_nb_budget_total = per_quarter
+    per_u_nb = max(u_nb_budget_total // max(n_u_nb, 1), 20) if n_u_nb else 0
+    per_v_nb = max(v_nb_budget_total // max(n_v_nb, 1), 20) if n_v_nb else 0
+
+    # ---- Build u side ----
+    input_ids: list[int] = []
+    node_spans: list[list[int]] = []
+    node_roles: list[int] = []
+    node_hops: list[int] = []
+
+    u_text_start = len(input_ids)
+    input_ids.extend(paper_a_prefix + paper_a_body)
+    u_text_end = len(input_ids)
+    node_spans.append([u_text_start, u_text_end])
+    node_roles.append(LP_ROLE_TARGET)
+    node_hops.append(0)
+
+    for idx, (nb_text, hop) in enumerate(zip(u_neighbor_texts, u_neighbor_hops)):
+        if len(input_ids) >= max_seq_len - len(q_toks) - 1:
+            break
+        nb_prefix = _tok(f"\nNeighbor A{idx + 1}: ")
+        nb_body = _tok(nb_text)
+        nb_full = (nb_prefix + nb_body)[:per_u_nb]
+        if not nb_full:
+            continue
+        s = len(input_ids)
+        input_ids.extend(nb_full)
+        node_spans.append([s, len(input_ids)])
+        node_roles.append(LP_ROLE_NBR_U)
+        node_hops.append(hop)
+
+    # ---- Build v side ----
+    v_text_start = len(input_ids)
+    input_ids.extend(paper_b_prefix + paper_b_body)
+    v_text_end = len(input_ids)
+    node_spans.append([v_text_start, v_text_end])
+    node_roles.append(LP_ROLE_TARGET)
+    node_hops.append(0)
+
+    for idx, (nb_text, hop) in enumerate(zip(v_neighbor_texts, v_neighbor_hops)):
+        if len(input_ids) >= max_seq_len - len(q_toks) - 1:
+            break
+        nb_prefix = _tok(f"\nNeighbor B{idx + 1}: ")
+        nb_body = _tok(nb_text)
+        nb_full = (nb_prefix + nb_body)[:per_v_nb]
+        if not nb_full:
+            continue
+        s = len(input_ids)
+        input_ids.extend(nb_full)
+        node_spans.append([s, len(input_ids)])
+        node_roles.append(LP_ROLE_NBR_V)
+        node_hops.append(hop)
+
+    # ---- Question + answer ----
+    q_start = len(input_ids)
+    input_ids.extend(q_toks)
+    label_token_pos = len(input_ids)
+    input_ids.append(answer_token)
+    q_end = len(input_ids)
+    node_spans.append([q_start, q_end])
+    node_roles.append(LP_ROLE_QUESTION)
+    node_hops.append(0)
+
+    # Enforce hard cap.
+    if len(input_ids) > max_seq_len:
+        input_ids = input_ids[:max_seq_len]
+
+    # Labels: -100 everywhere, supervise only the answer token (and optionally
+    # the two text bodies when mask_target_text is on).
+    labels = [-100] * len(input_ids)
+    if mask_target_text:
+        # u_text body
+        u_body_start = u_text_start + len(paper_a_prefix)
+        u_body_end = min(u_body_start + len(paper_a_body), len(labels))
+        for p in range(u_body_start, u_body_end):
+            labels[p] = input_ids[p]
+        # v_text body
+        v_body_start = v_text_start + len(paper_b_prefix)
+        v_body_end = min(v_body_start + len(paper_b_body), len(labels))
+        for p in range(v_body_start, v_body_end):
+            labels[p] = input_ids[p]
+
+    if label_token_pos < len(labels):
+        labels[label_token_pos] = answer_token
+
+    return {
+        "input_ids": input_ids,
+        "labels": labels,
+        "node_spans": node_spans,
+        "node_hops": node_hops,
+        "node_roles": node_roles,
+        "cls_label": cls_label,
+        "label_token_pos": label_token_pos,
+        "answer_len": 1,
+    }
+
+
+def _truncate_text_for_neighbor(node_data: dict, nb_id: int) -> str:
+    nd = node_data.get(nb_id)
+    if nd is None:
+        return ""
+    return f"{nd['title']}. {nd['abstract']}"
+
+
+def _sample_lp_neighbors(
+    adj: dict[int, list[int]],
+    u: int,
+    v: int,
+    max_neighbors_per_hop: int,
+    max_hops: int,
+    rng: random.Random,
+) -> tuple[list[int], list[int], list[int], list[int]]:
+    """Sample dedup'd k-hop neighbours for u and v. Drops v from u's pool, u
+    from v's pool, and drops shared neighbours from v's set so each id appears
+    at most once across the merged sequence."""
+    u_ids, u_hops = _sample_khop_neighbors(adj, u, max_neighbors_per_hop, max_hops, rng)
+    u_kept = [(nb, hop) for nb, hop in zip(u_ids, u_hops) if nb != v]
+    u_set = {nb for nb, _ in u_kept}
+    v_ids, v_hops = _sample_khop_neighbors(adj, v, max_neighbors_per_hop, max_hops, rng)
+    v_kept = [
+        (nb, hop) for nb, hop in zip(v_ids, v_hops) if nb != u and nb not in u_set
+    ]
+
+    u_ids2 = [nb for nb, _ in u_kept]
+    u_hops2 = [hop for _, hop in u_kept]
+    v_ids2 = [nb for nb, _ in v_kept]
+    v_hops2 = [hop for _, hop in v_kept]
+    return u_ids2, u_hops2, v_ids2, v_hops2
+
+
+def _build_lp_samples(
+    pos_edges: list[tuple[int, int]],
+    neg_edges: list[tuple[int, int]],
+    node_data: dict[int, dict],
+    adj_train: dict[int, list[int]],
+    tokenizer,
+    max_seq_len: int,
+    max_neighbors_per_hop: int,
+    max_hops: int,
+    seed: int,
+    mask_target_text: bool,
+) -> list[dict]:
+    rng = random.Random(seed)
+    samples: list[dict] = []
+
+    pairs = [((u, v), 1) for u, v in pos_edges] + [((u, v), 0) for u, v in neg_edges]
+    rng.shuffle(pairs)
+
+    for (u, v), label in pairs:
+        if u not in node_data or v not in node_data:
+            continue
+        u_nb_ids, u_nb_hops, v_nb_ids, v_nb_hops = _sample_lp_neighbors(
+            adj_train, u, v, max_neighbors_per_hop, max_hops, rng
+        )
+        u_nb_texts = [_truncate_text_for_neighbor(node_data, nb) for nb in u_nb_ids]
+        v_nb_texts = [_truncate_text_for_neighbor(node_data, nb) for nb in v_nb_ids]
+        u_text = f"{node_data[u]['title']}. {node_data[u]['abstract']}"
+        v_text = f"{node_data[v]['title']}. {node_data[v]['abstract']}"
+
+        sample = build_edge_sample(
+            u_text=u_text,
+            v_text=v_text,
+            u_neighbor_texts=u_nb_texts,
+            u_neighbor_hops=u_nb_hops,
+            v_neighbor_texts=v_nb_texts,
+            v_neighbor_hops=v_nb_hops,
+            cls_label=label,
+            tokenizer=tokenizer,
+            max_seq_len=max_seq_len,
+            mask_target_text=mask_target_text,
+        )
+        sample["edge"] = (int(u), int(v))
+        samples.append(sample)
+    return samples
+
+
+def load_lp_dataset(
+    dataset_name: str,
+    tokenizer,
+    split: str = "train",
+    max_seq_len: int = 2048,
+    max_neighbors_per_hop: int = MAX_NEIGHBORS_PER_HOP,
+    max_hops: int = MAX_HOPS,
+    seed: int = 42,
+    neg_ratio: int = 1,
+    mask_target_text: bool = False,
+    max_samples: int = 0,
+) -> Dataset:
+    """Load a link-prediction dataset and return an HF Dataset of LP samples.
+
+    v1 supports ``cora`` only; the loader is keyed by name so we can extend to
+    pubmed/arxiv later by adding entries to the dispatch below.
+    """
+    if dataset_name != "cora":
+        raise NotImplementedError(
+            f"LP loader v1 only supports 'cora', got {dataset_name!r}"
+        )
+
+    from dllm.data.datasets import cora_lp
+
+    config = DATASET_CONFIGS["cora"]
+    bundle = cora_lp.load(
+        config, split=split, seed=seed, neg_ratio=neg_ratio
+    )
+
+    samples = _build_lp_samples(
+        pos_edges=bundle["pos_edges"],
+        neg_edges=bundle["neg_edges"],
+        node_data=bundle["node_data"],
+        adj_train=bundle["adj_train"],
+        tokenizer=tokenizer,
+        max_seq_len=max_seq_len,
+        max_neighbors_per_hop=max_neighbors_per_hop,
+        max_hops=max_hops,
+        seed=seed,
+        mask_target_text=mask_target_text,
+    )
+    for s in samples:
+        s["dataset"] = dataset_name
+
+    if max_samples and max_samples > 0:
+        samples = samples[:max_samples]
+
+    dataset = Dataset.from_list(samples)
+    dataset.info.description = (
+        f"LP {dataset_name} ({split}) "
+        f"pos={len(bundle['pos_edges'])} neg={len(bundle['neg_edges'])}"
+    )
+    return dataset

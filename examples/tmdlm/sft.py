@@ -25,7 +25,7 @@ import transformers
 
 import dllm
 from dllm.pipelines import tmdlm
-from dllm.data.graph import load_tag_dataset
+from dllm.data.graph import load_tag_dataset, load_lp_dataset
 
 logger = dllm.utils.get_default_logger(__name__)
 
@@ -37,6 +37,20 @@ class ModelArguments(dllm.utils.ModelArguments):
 
 @dataclass
 class DataArguments:
+    task: str = field(
+        default="nc",
+        metadata={
+            "help": (
+                "Task type: 'nc' (node classification, default) or "
+                "'lp' (link prediction). 'lp' v1 supports cora only and "
+                "ignores prompt_format / answer_label_style / neighbor-label flags."
+            )
+        },
+    )
+    lp_neg_ratio: int = field(
+        default=1,
+        metadata={"help": "Negative samples per positive for link prediction (default 1:1)."},
+    )
     dataset_name: str = field(
         default="cora",
         metadata={
@@ -172,33 +186,68 @@ def train():
 
     # --- Dataset ---
     with accelerate.PartialState().local_main_process_first():
-        _common_kwargs = dict(
-            tokenizer=tokenizer,
-            max_seq_len=data_args.max_seq_len,
-            max_neighbors_per_hop=data_args.max_neighbors_per_hop,
-            max_hops=data_args.max_hops,
-            mask_target_text=data_args.mask_target_text,
-            prompt_format=data_args.prompt_format,
-            answer_label_style=data_args.answer_label_style,
-            max_answer_tokens=data_args.max_answer_tokens,
-            include_neighbor_labels=data_args.include_neighbor_labels,
-            neighbor_label_format=data_args.neighbor_label_format,
-            mask_neighbor_labels=data_args.mask_neighbor_labels,
-            balance_merged=data_args.balance_merged,
-            resample_strategy=data_args.resample_strategy,
-            boost_spec=data_args.boost_spec,
-        )
         ds_arg = data_args.dataset_name
         if isinstance(ds_arg, str) and "," in ds_arg:
             ds_arg = [s.strip() for s in ds_arg.split(",") if s.strip()]
-        train_dataset = load_tag_dataset(
-            ds_arg, split="train",
-            max_samples=data_args.max_train_samples,
-            **_common_kwargs,
-        )
-        val_dataset = load_tag_dataset(
-            ds_arg, split="val", **_common_kwargs
-        )
+
+        if data_args.task == "lp":
+            if not isinstance(ds_arg, str):
+                raise ValueError(
+                    "LP task only supports a single dataset_name; got list "
+                    f"{ds_arg!r}"
+                )
+            # The auxiliary cls loss in TMDLMTrainer restricts logits to
+            # digit tokens "0".."K-1", which does not match the LP answer
+            # set (" yes"/" no"). Force-disable it; the main masked-token
+            # CE on the answer position already supervises yes/no.
+            if training_args.cls_loss_weight > 0:
+                logger.warning(
+                    "Disabling cls_loss_weight for LP task (was %.2f); "
+                    "main MDLM loss on the answer token still supervises yes/no.",
+                    training_args.cls_loss_weight,
+                )
+                training_args.cls_loss_weight = 0.0
+            _lp_kwargs = dict(
+                tokenizer=tokenizer,
+                max_seq_len=data_args.max_seq_len,
+                max_neighbors_per_hop=data_args.max_neighbors_per_hop,
+                max_hops=data_args.max_hops,
+                mask_target_text=data_args.mask_target_text,
+                neg_ratio=data_args.lp_neg_ratio,
+            )
+            train_dataset = load_lp_dataset(
+                ds_arg, split="train",
+                max_samples=data_args.max_train_samples,
+                **_lp_kwargs,
+            )
+            val_dataset = load_lp_dataset(
+                ds_arg, split="val", **_lp_kwargs,
+            )
+        else:
+            _common_kwargs = dict(
+                tokenizer=tokenizer,
+                max_seq_len=data_args.max_seq_len,
+                max_neighbors_per_hop=data_args.max_neighbors_per_hop,
+                max_hops=data_args.max_hops,
+                mask_target_text=data_args.mask_target_text,
+                prompt_format=data_args.prompt_format,
+                answer_label_style=data_args.answer_label_style,
+                max_answer_tokens=data_args.max_answer_tokens,
+                include_neighbor_labels=data_args.include_neighbor_labels,
+                neighbor_label_format=data_args.neighbor_label_format,
+                mask_neighbor_labels=data_args.mask_neighbor_labels,
+                balance_merged=data_args.balance_merged,
+                resample_strategy=data_args.resample_strategy,
+                boost_spec=data_args.boost_spec,
+            )
+            train_dataset = load_tag_dataset(
+                ds_arg, split="train",
+                max_samples=data_args.max_train_samples,
+                **_common_kwargs,
+            )
+            val_dataset = load_tag_dataset(
+                ds_arg, split="val", **_common_kwargs
+            )
 
     # --- Trainer ---
     accelerate.PartialState().wait_for_everyone()
