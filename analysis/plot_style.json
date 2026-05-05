@@ -36,10 +36,11 @@
     "markersize": 5,
     "endpoint_label_fontsize": 8,
     "palette": {
-      "logit_notopo":  { "color": "#2166AC", "linestyle": "-",  "marker": "o", "label": "Logit · no-topo" },
-      "logit_topo":    { "color": "#2166AC", "linestyle": "--", "marker": "s", "label": "Logit · topo" },
-      "infill_notopo": { "color": "#D55E00", "linestyle": "-",  "marker": "o", "label": "Infill · no-topo" },
-      "infill_topo":   { "color": "#D55E00", "linestyle": "--", "marker": "s", "label": "Infill · topo" }
+      "logit_notopo":     { "color": "#2166AC", "linestyle": "-",  "marker": "o", "label": "Logit · no-topo" },
+      "logit_topo":       { "color": "#2166AC", "linestyle": "--", "marker": "s", "label": "Logit · topo" },
+      "logit_topo_boost": { "color": "#D55E00", "linestyle": "--", "marker": "^", "label": "Logit · topo (boost)" },
+      "infill_notopo":    { "color": "#D55E00", "linestyle": "-",  "marker": "o", "label": "Infill · no-topo" },
+      "infill_topo":      { "color": "#D55E00", "linestyle": "--", "marker": "s", "label": "Infill · topo" }
     }
   },
 

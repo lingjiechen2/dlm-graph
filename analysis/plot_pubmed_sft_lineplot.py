@@ -83,7 +83,7 @@ def plot_baselines(ax, baselines: dict[str, float], style: dict,
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--jsonl_dir", default="/tmp/dlm-graph-eval-jsonl")
-    parser.add_argument("--run_tag", default="pubmed_20260428_aligned")
+    parser.add_argument("--run_tag", default="pubmed_20260502_mcdigit_nonb_seq4k")
     parser.add_argument("--baselines", default="analysis/baselines_pubmed.json")
     parser.add_argument("--style", default="analysis/plot_style.json")
     parser.add_argument("--out", default="analysis/figures/pubmed_sft_lineplot.png")
@@ -95,17 +95,22 @@ def main() -> None:
     style = load_style(Path(args.style))
     apply_rcparams(style)
 
-    series_paths = {
-        ("logit",  "notopo"): base / f"eval-pubmed-2hop-notopo-{tag}.jsonl",
-        ("logit",  "topo"):   base / f"eval-pubmed-2hop-topo-{tag}.jsonl",
-        ("infill", "notopo"): base / f"eval-pubmed-2hop-notopo-{tag}-infill.jsonl",
-        ("infill", "topo"):   base / f"eval-pubmed-2hop-topo-{tag}-infill.jsonl",
-    }
+    # Logit-only, 2 lines (notopo + topo). Filename pattern auto-detected
+    # from run_tag: seq4k uses the eval_logit-style filenames, seq2k uses
+    # the older 2hop-* filenames.
+    if "seq4k" in tag:
+        series_paths = {
+            ("logit", "notopo"): base / f"eval-pubmed-seq4k-notopo-mcdigit-{tag}-logit.jsonl",
+            ("logit", "topo"):   base / f"eval-pubmed-seq4k-topo-mcdigit-{tag}-logit.jsonl",
+        }
+    else:
+        series_paths = {
+            ("logit", "notopo"): base / f"eval-pubmed-2hop-notopo-{tag}.jsonl",
+            ("logit", "topo"):   base / f"eval-pubmed-2hop-topo-{tag}.jsonl",
+        }
     palette_key = {
-        ("logit",  "notopo"): "logit_notopo",
-        ("logit",  "topo"):   "logit_topo",
-        ("infill", "notopo"): "infill_notopo",
-        ("infill", "topo"):   "infill_topo",
+        ("logit", "notopo"): "logit_notopo",
+        ("logit", "topo"):   "logit_topo",
     }
 
     s = style["series"]

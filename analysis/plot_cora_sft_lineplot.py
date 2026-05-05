@@ -83,7 +83,7 @@ def plot_baselines(ax, baselines: dict[str, float], style: dict,
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--jsonl_dir", default="/tmp/dlm-graph-eval-jsonl")
-    parser.add_argument("--run_tag", default="llaga_20260427_aligned")
+    parser.add_argument("--run_tag", default="cora_20260429_mcdigit_nonb_fixed")
     parser.add_argument("--baselines", default="analysis/baselines_cora.json")
     parser.add_argument("--style", default="analysis/plot_style.json")
     parser.add_argument("--out", default="analysis/figures/cora_sft_lineplot.png")
@@ -95,17 +95,17 @@ def main() -> None:
     style = load_style(Path(args.style))
     apply_rcparams(style)
 
+    # §1 cora mc_digit nonb baseline (run tag cora_20260429_mcdigit_nonb_fixed)
+    # plus §8 cora mc_digit boost nonb topo overlay.
     series_paths = {
-        ("logit",  "notopo"): base / f"eval-cora-2hop-notopo-{tag}.jsonl",
-        ("logit",  "topo"):   base / f"eval-cora-2hop-topo-{tag}.jsonl",
-        ("infill", "notopo"): base / f"eval-cora-2hop-notopo-{tag}-infill.jsonl",
-        ("infill", "topo"):   base / f"eval-cora-2hop-topo-{tag}-infill.jsonl",
+        ("logit", "notopo"):     base / f"eval-cora-2hop-notopo-nonb-{tag}.jsonl",
+        ("logit", "topo"):       base / f"eval-cora-2hop-topo-nonb-{tag}.jsonl",
+        ("logit", "topo_boost"): base / "eval-cora-boost-topo-mcdigit-cora_20260430_boost-logit.jsonl",
     }
     palette_key = {
-        ("logit",  "notopo"): "logit_notopo",
-        ("logit",  "topo"):   "logit_topo",
-        ("infill", "notopo"): "infill_notopo",
-        ("infill", "topo"):   "infill_topo",
+        ("logit", "notopo"):     "logit_notopo",
+        ("logit", "topo"):       "logit_topo",
+        ("logit", "topo_boost"): "logit_topo_boost",
     }
 
     s = style["series"]
