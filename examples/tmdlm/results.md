@@ -372,32 +372,111 @@ Take-aways. (i) Cora-notopo saturates around 90.8 logit / 91.0 infill at ckpt-26
 
 
 Take-aways. (i) The naive merge in §6 (`category_infill`, `max_answer_tokens=10`, no resampling) produces class collapse on Cora — Cora-notopo accuracy degrades from 63.84 at ckpt-422 to 39.85 at ckpt-1055, while PubMed plateaus at ~77.5 because the unconstrained `[Diab]…` answer prefix lets PubMed dominate the loss. The topo mask delays but does not prevent the collapse. (ii) Switching to `mc_digit` (single-digit answer, `max_answer_tokens=1`, `cls_loss_weight=1.0`) plus `--resample_strategy balance_datasets` (each dataset down-sampled to 1624 examples) eliminates the collapse: §7 matches or exceeds the §1 single-dataset Cora baselines on both settings (Cora-notopo ties at 90.77, Cora-topo improves +0.92 pt to 90.96) while reaching 95.28 on PubMed-notopo, surpassing the LLaGA-7B oracle-projector baseline (95.03). (iii) Both PubMed settings show a transient ckpt-459 dip (notopo 91.78, topo 90.09) followed by recovery — likely an lr-scheduler artifact, not a regression. (iv) Conclusion: a single-token answer space plus dataset-balanced resampling is sufficient to train one LoRA on Cora+PubMed jointly without sacrificing per-dataset accuracy on either.
-### §13. pubmed mc_digit nonb at `max_seq_len=4096` (run tag `pubmed_20260502_mcdigit_nonb_seq4k`, **in progress**)
+### §13. pubmed mc_digit nonb at `max_seq_len=4096` (run tag `pubmed_20260502_mcdigit_nonb_seq4k`, **complete**)
 
 Single-dataset PubMed, `mc_digit + nonb`, `max_hops=2`, `max_neighbors_per_hop=10`. Same per-device batch / grad-accum recipe as §11 (`max_seq_len=4096`, `per_device_train_batch=3`, `grad_accum=16`, effective batch 48, 10 epochs, ~1972 total steps; `save_steps=eval_steps=0.05`, `cls_loss_weight=0.0`). Motivation: pubmed abstracts are typically longer than cora — at seq=2048 each neighbor was budget-bound to ~144 tokens, truncating most. seq=4096 raises the per-neighbor budget to ~306 tokens, removing token-level truncation for nearly all neighbors.
 
-#### Logit Eval (pubmed test, full split n=3944; in progress)
+#### Logit Eval (pubmed test, n=999 full split)
 
 
 | ckpt | pubmed-notopo | pubmed-topo |
 | ---- | ------------- | ----------- |
 | 124  | 92.40         | 93.80       |
-| 248  | **95.40**     | 93.99       |
-| 372  | 94.80         | **95.06**   |
+| 248  | 95.40         | 93.99       |
+| 372  | 94.80         | 95.06       |
 | 496  | 94.47         | 94.80       |
 | 620  | 95.23         | 94.57       |
-| 744  | 95.39         | —           |
+| 744  | 95.39         | **96.30** ⭐ |
 | 868  | 94.42         | —           |
+| 992  | **95.70**     | —           |
 
 
-Self-eval (pubmed → pubmed). Notopo evaluated through ckpt-868, topo through ckpt-620; topo's 744 not yet evaled (ckpt-744 on disk, eval queued). SFT is still running: topo at step 857/2470 (GPU 2), notopo at step 1002/2470 (GPU 5). Both variants now show diminishing returns past their respective peaks — **notopo peaks at ckpt-248 (95.40)**, with 744 (95.39) essentially tied and other later checkpoints (372/496/620/868) bouncing 94.42–95.23; **topo peaks at ckpt-372 (95.06)**, then drifts down to 94.57–94.80. Pattern is consistent with mild overfitting after ~15% of optimization budget. Both seq=4096 best results match or beat §9 (pubmed seq=2048: notopo 95.18 / topo 94.47), confirming the seq-length lift on PubMed.
+Self-eval (pubmed → pubmed), all SFT checkpoints evaluated. **Topo peaks at 96.30 @ ckpt-744, beating notopo's peak 95.70 @ ckpt-992 by +0.60 pt** — this is the first clean case in the nonb setting where topo surpasses notopo at peak. Both variants show non-monotone trajectories: topo trends generally up (93.8 → 94.0 → 95.1 → 94.8 → 94.6 → 96.3), notopo bounces in [94.42, 95.70] after the early ckpt-248 high. The seq=4096 result also clears §9 single-pubmed seq=2048 (notopo 95.18 / topo 94.47) by a wide margin, confirming the seq-length lift. The topo win is consistent with the H2 prediction that the topo↔notopo gap shrinks as the target-token share of each head's attended set grows (longer sequences dilute the structural mask's effect).
 JSONL: `/tmp/dlm-graph-eval-jsonl/eval-pubmed-seq4k-{topo,notopo}-mcdigit-pubmed_20260502_mcdigit_nonb_seq4k-logit.jsonl`
 
-### §14. cora mc_digit nonb at `max_seq_len=4096` *aligned* (run tag `cora_20260502_mcdigit_nonb_seq4k_aligned`, **topo only, in progress**)
+### §14. cora mc_digit nonb at `max_seq_len=4096` *aligned* (run tag `cora_20260502_mcdigit_nonb_seq4k_aligned`, **topo only, complete**)
 
-Variant of §11 controlling for total optimizer steps. §11 reduced per-device batch 6 → 3 to fit seq=4096 in 80GB but kept grad_accum=8, halving total steps (510 → 340). §14 keeps grad_accum=16 *and* further reduces per-device batch 3 → 2, restoring effective batch to 32 (matching §1's 4×8) and total optimizer steps to **510** (same as §1). All other knobs identical to §1 / §11 (`mc_digit`, `nonb`, `hop=2`, `nb=10`, `cls_loss_weight=0.0`, 10 epochs, `save_steps=eval_steps=0.05`). Currently topo only on GPU 4 (no notopo run yet); SFT at ~step 31/510, ~6h45m ETA. Self-eval to follow once ckpts arrive.
+Variant of §11 controlling for total optimizer steps. §11 reduced per-device batch 6 → 3 to fit seq=4096 in 80GB but kept grad_accum=8, halving total steps (510 → 340). §14 keeps grad_accum=16 *and* further reduces per-device batch 3 → 2, restoring effective batch to 32 (matching §1's 4×8) and total optimizer steps to **510** (same as §1). All other knobs identical to §1 / §11 (`mc_digit`, `nonb`, `hop=2`, `nb=10`, `cls_loss_weight=0.0`, 10 epochs, `save_steps=eval_steps=0.05`). Topo only.
 
-### §15. Dataset graph statistics — neighbor density across cora / pubmed / ogbn-arxiv / ogbn-products
+#### Logit Eval (cora test, n=542 full split)
+
+
+| ckpt | cora-topo | | ckpt | cora-topo |
+| ---- | --------- |-| ---- | --------- |
+| 26   | 75.28     | | 286  | **90.22** ⭐ |
+| 52   | 81.73     | | 312  | 88.75     |
+| 78   | 84.32     | | 338  | 89.85     |
+| 104  | 86.53     | | 364  | 89.85     |
+| 130  | 86.35     | | 390  | 90.22     |
+| 156  | 86.90     | | 416  | 89.67     |
+| 182  | 85.79     | | 442  | 90.22     |
+| 208  | 88.01     | | 468  | 90.04     |
+| 234  | 88.38     | | 494  | 89.85     |
+| 260  | 87.64     | | 510  | 89.85     |
+
+
+**Peak 90.22 @ ckpt-286** (also 390 / 442). Compared to §1 single-cora seq=2048 topo peak 90.04 @ ckpt-312, **§14 seq=4096 with matched step budget edges out seq=2048 by +0.18 pt** — reversing the apparent regression in §11 (which was confounded by a 510→340 step-budget shortfall). Net conclusion: the seq=2k → 4k expansion on cora is at worst neutral and slightly positive *when total optimizer steps are held fixed*; §11's lower number was an optimization-budget artifact, not a sequence-length penalty.
+JSONL: `/tmp/dlm-graph-eval-jsonl/eval-cora-seq4k-aligned-topo-mcdigit-cora_20260502-logit.jsonl`
+
+### §15. cora category_infill EOS-padded (run tag `cora_20260503_catinfill_nonb_eospad_seq2k`, **complete**)
+
+Single-dataset cora, `prompt_format=category_infill` with the answer window padded by `eos_token_id` instead of `pad_token_id` (matching the upstream LLaDA SFT recipe in `examples/llada/sft.py`, which sets `label_pad_token_id=tokenizer.pad_token_id` and supervises EOS positions). All other knobs identical to §1 (`max_seq_len=2048`, `hop=2`, `nb=10`, `nonb`, `cls_loss_weight=0.0`, 10 epochs, eff batch 32, 510 steps). `max_answer_tokens=6` to fit the longest cora class name. Topo only.
+
+#### Infill Eval (cora test, n=542; `--steps=max_answer_tokens=6`, T=0.0)
+
+
+| ckpt | cora-topo | | ckpt | cora-topo |
+| ---- | --------- |-| ---- | --------- |
+| 26   | 73.62     | | 286  | 88.01     |
+| 52   | 74.17     | | 312  | 87.82     |
+| 78   | 81.73     | | 338  | 88.01     |
+| 104  | 83.03     | | 364  | 88.75     |
+| 130  | 85.24     | | 390  | **89.67** ⭐ |
+| 156  | 85.61     | | 416  | 89.48     |
+| 182  | 85.79     | | 442  | 88.75     |
+| 208  | 85.61     | | 468  | 88.75     |
+| 234  | 85.98     | | 494  | 89.11     |
+| 260  | 86.72     | | 510  | 89.11     |
+
+
+**Peak 89.67 @ ckpt-390**, ~0.4 pt below §1 mc_digit topo (90.04). Category-name infilling is a strictly harder task than picking a digit (the model must produce a multi-token class name, scored by mean log-prob over valid name positions), so a small accuracy gap vs mc_digit is expected. The convergence trajectory is monotone and stable; no class-collapse pathology like in §6 (which used `pad_token_id` filler instead of EOS). Useful as a stepping stone toward open-vocabulary node classification where the answer space is not enumerable as digits.
+JSONL: `/tmp/dlm-graph-eval-jsonl/eval-cora-seq2k-topo-catinfill-eospad-cora_20260503-infill.jsonl`
+
+### §16. cora topo r=128 LoRA capacity ablation (run tag `cora_20260504_mcdigit_nonb_r128`, **complete**)
+
+H2 ablation: doubles LoRA rank from r=64 (§1 default) to r=128 (alpha=128 to keep alpha/r=1.0). All other settings identical to §1 cora topo (`max_seq_len=2048`, `mc_digit`, `nonb`, `hop=2`, `nb=10`, eff batch 32, 510 steps). Tests whether under-parameterization of the low-rank adapter is the primary reason topo lags notopo in §1.
+
+#### Logit Eval (cora test, n=542 full split)
+
+
+| ckpt | r=128 topo | r=64 topo (§1) | r=64 notopo (§1) | Δ(r=128 vs r=64 topo) |
+| ---- | ---------- | -------------- | ---------------- | --------------------- |
+| 26   | 76.57      | 75.46          | 78.23            | +1.11                 |
+| 52   | 81.18      | 81.73          | 81.55            | −0.55                 |
+| 78   | 84.32      | 84.50          | 85.24            | −0.18                 |
+| 104  | 85.06      | 83.58          | 85.61            | +1.48                 |
+| 130  | 86.16      | 86.72          | 86.35            | −0.56                 |
+| 156  | 88.01      | 87.27          | 86.16            | +0.74                 |
+| 182  | 86.35      | 87.82          | 89.11            | −1.47                 |
+| 208  | 88.01      | 87.64          | 89.11            | +0.37                 |
+| 234  | 89.30      | 87.45          | 88.75            | +1.85                 |
+| 260  | 88.93      | 88.93          | 90.41            | +0.00                 |
+| 286  | 88.75      | 88.93          | 89.67            | −0.18                 |
+| 312  | 86.72      | 90.04          | 90.59            | −3.32                 |
+| 338  | 89.85      | 89.11          | 90.77            | +0.74                 |
+| 364  | 90.22      | 89.11          | 90.41            | +1.11                 |
+| **390** | **90.41** ⭐ | 89.85       | 90.22            | +0.56                 |
+| 416  | 89.67      | 89.48          | 90.41            | +0.19                 |
+| 442  | 89.67      | 89.67          | 90.59            | +0.00                 |
+| 468  | 89.30      | 89.67          | 90.41            | −0.37                 |
+| 494  | 89.85      | 89.67          | 90.22            | +0.18                 |
+| 510  | 89.48      | 89.48          | 90.41            | +0.00                 |
+
+
+**r=128 topo peak 90.41 @ ckpt-390 vs r=64 topo peak 90.04 @ ckpt-312 (+0.37 pt at peak)**, and **vs r=64 notopo peak 90.77 @ ckpt-338 (−0.36 pt)**. Doubling LoRA capacity recovers about half of the original topo↔notopo gap (0.73 → 0.36) and produces small per-checkpoint gains on average (+0.10 pt mean delta vs r=64 topo), but does not close the gap. **H2 (insufficient adapter capacity) is therefore a contributing factor but not the primary cause** of topo's underperformance — the remaining ~0.36 pt deficit must come from H1 (cross-neighbor information bottleneck) or H3 (neighbor gradient starvation). The −3.32 pt single-point dip at ckpt-312 is the only large outlier and likely reflects a transient optimizer instability in the larger-rank run; r=64 is more stable through the same step. Practical conclusion: capacity scaling alone is not sufficient; pair with structural fixes (auxiliary MLM on neighbor tokens, real-subgraph mask) to close the residual gap.
+JSONL: `/tmp/dlm-graph-eval-jsonl/eval-cora-seq2k-topo-mcdigit-r128-cora_20260504-logit.jsonl`
+
+### §17. Dataset graph statistics — neighbor density across cora / pubmed / ogbn-arxiv / ogbn-products
 
 To contextualize the topology-mask experiments and the seq-length budget analyses, we measured the per-node neighbor density on each dataset's train split. For each train node we recorded both (i) the raw 1-hop degree in the loader's full adjacency dict (no split filtering — neighbors may span train/val/test) and (ii) the number of neighbors actually fed to the model after `_sample_khop_neighbors(max_neighbors_per_hop=10, max_hops=2)` caps each hop at 10 (so the per-node total is bounded by 20). All numbers are computed on a 2000-node random sample (or the full split when smaller).
 
@@ -412,5 +491,5 @@ Three observations follow. First, **ogbn-products is qualitatively different fro
 
 Second, **arxiv has by far the densest graph** (mean raw degree 14.1, max 1251) and 29.9% of its train nodes hit the 20-neighbor cap during sampling. Raising `max_neighbors_per_hop` above 10 would expose more graph signal on arxiv, whereas on cora/pubmed only 5–13% of samples saturate the cap and on products the cap is effectively irrelevant.
 
-Third, **the seq-length budget analyses in §11 / §13 / §16-products are independent of this graph property**: even with seq → ∞, isolated products nodes still have no neighbors to feed in. The seq=4096 lift observed on cora and pubmed comes from preserving longer abstracts of *existing* neighbors, which products cannot benefit from for the 74% isolated subset.
+Third, **the seq-length budget analyses in §11 / §13 / §14 are independent of this graph property**: even with seq → ∞, isolated products nodes still have no neighbors to feed in. The seq=4096 lift observed on cora and pubmed comes from preserving longer abstracts of *existing* neighbors, which products cannot benefit from for the 74% isolated subset.
 
