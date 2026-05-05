@@ -493,3 +493,41 @@ Second, **arxiv has by far the densest graph** (mean raw degree 14.1, max 1251) 
 
 Third, **the seq-length budget analyses in §11 / §13 / §14 are independent of this graph property**: even with seq → ∞, isolated products nodes still have no neighbors to feed in. The seq=4096 lift observed on cora and pubmed comes from preserving longer abstracts of *existing* neighbors, which products cannot benefit from for the 74% isolated subset.
 
+## §18. Topo vs. notopo gap analysis (consolidated)
+
+This section consolidates the three concrete findings from §13 / §14 / §16 about when, and by how much, the topology-mask hurts (or helps) accuracy relative to dense attention. We state each conclusion in revised, scope-honest form and tie it back to the rows it draws on.
+
+### 18.1 Conclusion 1 — On pubmed, raising seq from 2k to 4k flips the topo↔notopo gap from −0.71 to +0.60
+
+| seq | run tag                                       | notopo peak                  | topo peak                    | gap (topo − notopo) |
+| --- | --------------------------------------------- | ---------------------------- | ---------------------------- | ------------------- |
+| 2k  | `pubmed_20260428_aligned` (§9)                | 95.30 @ 656                  | 94.59 @ 656                  | **−0.71**           |
+| 4k  | `pubmed_20260502_mcdigit_nonb_seq4k` (§13)    | 95.70 @ 992                  | **96.30** @ 744              | **+0.60**           |
+
+A 1.31-point swing (−0.71 → +0.60) in favor of topology-mask is the clearest evidence we have that the dense baseline's edge at seq=2k is a *truncation* artefact rather than a fundamental limit of the topo block-mask: with 2× the context, every neighbor abstract fits and the topo run reaches a new global topo peak (96.30 ⭐, the highest topo accuracy across every pubmed setting we have run). Strength: ⭐⭐⭐⭐ (peak-to-peak across 20 ckpts × 2 conditions on the full pubmed test set, n=1000 cap).
+
+**Open question.** Whether this result generalizes to cora is unverified — we have not yet run a cora seq=4k *notopo* control with the §1-aligned step budget (§14 only covers topo at seq=4k). Until that control is run, we cannot claim seq=4k flips the cora gap.
+
+### 18.2 Conclusion 2 — On cora, the apparent "seq=4k regression" was a step-budget confound, not a real regression
+
+| run                                                       | seq | total optimizer steps | topo peak           |
+| --------------------------------------------------------- | --- | --------------------- | ------------------- |
+| §1  `cora_20260429_mcdigit_nonb_fixed`  (eff bs=32)       | 2k  | 510                   | 90.04 @ 312         |
+| §11 `cora_20260502_mcdigit_nonb_seq4k`  (unaligned)       | 4k  | 340                   | 88.93 @ 272         |
+| §14 `cora_20260503_mcdigit_nonb_seq4k_aligned` (eff bs=32)| 4k  | 510                   | **90.22 @ 286**     |
+
+Once the seq=4k cora run is given the same effective batch (32 = per_device 4 × grad_accum 8) and therefore the same 510-step training budget as §1, peak accuracy *recovers* to 90.22 — actually +0.18 above §1's 90.04. The −1.11 drop reported in §11 was entirely explained by the 33% step-budget shortfall (340 vs 510). On cora, doubling seq with matched compute is at worst neutral for topo. Strength: ⭐⭐⭐ (matched-budget head-to-head, single seed each, peak-to-peak comparison; small absolute gap).
+
+### 18.3 Conclusion 3 — Doubling LoRA rank (r=64 → r=128) closes only ~51% of the cora topo↔notopo gap
+
+| run                                              | r   | topo peak       | notopo peak (§1) | gap to notopo |
+| ------------------------------------------------ | --- | --------------- | ---------------- | ------------- |
+| §1  `cora_20260429_mcdigit_nonb_fixed` topo      | 64  | 90.04 @ 312     | 90.77 @ 364      | **−0.73**     |
+| §16 `cora_20260504_mcdigit_nonb_r128` topo       | 128 | **90.41 @ 390** | 90.77 (§1)       | **−0.36**     |
+
+Doubling LoRA rank (and α) lifts the topo peak by +0.37 and shrinks the gap from −0.73 to −0.36 — i.e. capacity recovers ~51% of the deficit but does not eliminate it. This rules out *insufficient adapter capacity alone* (H2) as the full explanation and leaves H1 (cross-neighbor information bottleneck through the block-diagonal mask) and H3 (neighbor gradient starvation: with `include_neighbor_labels=False`, no token-level signal flows through neighbor positions during SFT) as the remaining candidates for the residual ~0.36-point gap. Strength: ⭐⭐⭐ (single-axis ablation with all other hyperparameters held to §1; one seed; small absolute effect).
+
+### 18.4 Where this leaves us
+
+Across the three datasets and the three controls above, the topo block-mask is competitive with — and on pubmed seq=4k *exceeds* — dense attention; the residual cora gap of ~0.36 points after r=128 is small in absolute terms but consistent across 20 checkpoints. The most informative remaining experiments are (i) a cora seq=4k *notopo* run with the §1-aligned 510-step budget, to confirm or refute that the pubmed seq=4k reversal generalizes; (ii) an auxiliary MLM loss on neighbor positions (H3) to test whether token-level neighbor supervision closes the residual cora gap without growing adapter capacity further; and (iii) replacing the strict block-diagonal mask with a real-subgraph attention pattern (H1) so that neighbor↔neighbor edges of the original graph remain visible to attention.
+
