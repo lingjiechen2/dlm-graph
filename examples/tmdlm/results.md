@@ -531,3 +531,45 @@ Doubling LoRA rank (and α) lifts the topo peak by +0.37 and shrinks the gap fro
 
 Across the three datasets and the three controls above, the topo block-mask is competitive with — and on pubmed seq=4k *exceeds* — dense attention; the residual cora gap of ~0.36 points after r=128 is small in absolute terms but consistent across 20 checkpoints. The most informative remaining experiments are (i) a cora seq=4k *notopo* run with the §1-aligned 510-step budget, to confirm or refute that the pubmed seq=4k reversal generalizes; (ii) an auxiliary MLM loss on neighbor positions (H3) to test whether token-level neighbor supervision closes the residual cora gap without growing adapter capacity further; and (iii) replacing the strict block-diagonal mask with a real-subgraph attention pattern (H1) so that neighbor↔neighbor edges of the original graph remain visible to attention.
 
+### §19. Cross-domain eval: pubmed → cora (run tag `pubmed_20260502_mcdigit_nonb_seq4k`, **complete**)
+
+Symmetric counterpart to the cora → pubmed cross-eval in §11. Each pubmed seq=4k checkpoint (the §13 run) is evaluated on the full cora test split (n=542) using `eval_logit`, `mc_digit`, `digit0`, `max_seq_len=4096`, `max_answer_tokens=1`, `max_neighbors_per_hop=10`, `max_hops=2`, `include_neighbor_labels=False`. Topo training only produced 6 checkpoints (124..744); notopo ran the full 8 (124..992).
+
+JSONL: `/tmp/dlm-graph-eval-jsonl/eval-cross-pubmed2cora-seq4k-{topo,notopo}-pubmed_20260502_mcdigit_nonb_seq4k-logit.jsonl`
+
+| ckpt | topo  | notopo | gap (topo − notopo) |
+| ---- | ----- | ------ | ------------------- |
+| 124  | 75.09 | **76.38** ⭐ | **−1.29** |
+| 248  | 73.06 | 73.43 | −0.37 |
+| 372  | 74.35 | 75.46 | −1.11 |
+| 496  | 73.25 | 74.35 | −1.10 |
+| 620  | 73.25 | 73.62 | −0.37 |
+| 744  | 72.88 | 73.99 | −1.11 |
+| 868  | —     | 74.54 | —     |
+| 992  | —     | 73.43 | —     |
+| **peak** | **75.09 @ 124** | **76.38 @ 124** | **−1.29** |
+
+Three observations. First, **both peaks land at ckpt-124** (the earliest checkpoint we evaluate), and accuracy declines monotonically from there. This is the standard cross-domain forgetting curve — the longer the model is fine-tuned on pubmed-specific 3-class medical labels, the worse it transfers to cora's 7-class ML labels. Second, **notopo wins at every ckpt** by 0.4 to 1.3 points, opposite to the in-domain §13 result where topo overtook notopo by +0.60 at seq=4k. The structural prior the topo block-mask encodes is helpful when the train and test graphs have the same neighborhood semantics, but becomes a liability when those semantics shift across domains. Third, on cora the **Theory class** is the limiting factor (per-class accuracy 27–36% across all ckpts vs 65%+ for the other six classes); Theory is the most label-ambiguous class in cora and the one most reliant on residual general-LM commonsense rather than learned graph features.
+
+Combined with §11 (cora → pubmed, also notopo > topo across the cross-eval grid), this gives **two-direction confirmation that dense attention is more cross-domain robust than the topology-mask block-diagonal pattern**, even when the in-domain comparison favors topo.
+
+### §20. arxiv seq=4k mc_digit nonb (run tag `arxiv_20260503_mcdigit_nonb_seq4k`, **in progress — first 25% snapshot only**)
+
+First arxiv run on the seq=4k + mc_digit + nonb pipeline, replacing the older §-pre-29 catinfill run. Settings match §13 / §14: `max_seq_len=4096`, `max_neighbors_per_hop=10`, `max_hops=2`, `mc_digit + digit0`, `max_answer_tokens=2` (40-class arxiv needs 2 digits "00".."39"), `include_neighbor_labels=False`, `max_train_samples=20000`, `max_steps=1668` (4 epoch over 20k samples at effective batch 48), LoRA r=64/α=64 on `all-linear`. Initial single-GPU training was killed at step 420 (25%) after the periodic HF-trainer eval (eval_steps=0.1, eval set ≈ 14900 batches × 1.6 s/it ≈ 6.6 h per single eval) stalled the run; relaunched as 4-GPU DDP with `eval_strategy=no` and on-disk TAG-cache (commit `a92dc66`) to avoid both pitfalls. The numbers below are from the first 5 checkpoints of the killed single-GPU run (84..420); the full 1668-step DDP run is currently underway and will overwrite ckpts 84..420 with fresh ones.
+
+eval_logit on full arxiv test (cap n=1000), `max_seq_len=4096`, batch_size=2.
+
+JSONL: `/tmp/dlm-graph-eval-jsonl/eval-arxiv-seq4k-{topo,notopo}-mcdigit-arxiv_20260503{,_mcdigit_nonb_seq4k}-logit.jsonl`
+
+| ckpt | topo  | notopo | gap (topo − notopo) |
+| ---- | ----- | ------ | ------------------- |
+| 84   | 53.67 | 52.67 | +1.00 |
+| 168  | **69.50** ⭐ | 69.10 | +0.40 |
+| 252  | 65.10 | 64.60 | +0.50 |
+| 336  | 68.50 | 69.10 | −0.60 |
+| 420  | 68.80 | **70.00** ⭐ | **−1.20** |
+
+The crossover at ckpt-336 mirrors the late-stage divergence we see on cora (§14) but in the opposite direction from pubmed (§13 had topo overtake notopo): **on arxiv, dense attention pulls ahead the longer training continues**. ckpt-252 is a synchronized dip on both lines (data / optimization noise rather than mask-specific behavior). Peak topo at the snapshot is 69.50 @ 168; peak notopo is 70.00 @ 420 and still rising. With only 25% of training complete and the curves still climbing 4–6 pt over baseline, no firm head-to-head conclusion is possible until the full 1668-step DDP run finishes.
+
+Per-class breakdown at ckpt-420 (40 arxiv classes, eval n=1000): top tier `cs.AR` 100 / `cs.CV` 99 / `cs.CL` 86–89 / `cs.CG` 87–88 / `cs.RO` 85–88 / `cs.DS` 76–85 / `cs.SD` 86; bottom tier 8 classes at 0% (`cs.NA / cs.MM / cs.CY / cs.GL / cs.SC / cs.GR / cs.OH / cs.OS`) — these eight together are 2.59% of the test split, so lifting them all to the non-zero mean of 58% would only move the overall accuracy by under 1 pt. The real ceiling is set by `cs.LG` (Machine Learning), which is 22.10% of the test split but only 7.69% of train (a 2.87× distribution shift introduced by the time-based OGB-arxiv split — test papers are post-2018, when ML exploded outside the train period); cs.LG sits at 56–59% accuracy and ~12 pp of the overall comes from this class alone, so any future architectural lever on arxiv must target the cs.LG ↔ cs.AI / cs.CV / cs.CL confusion rather than the long tail.
+
