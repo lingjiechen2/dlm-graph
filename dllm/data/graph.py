@@ -14,6 +14,9 @@ Each returned sample contains:
     label_token_pos int             Index of first class-name token in input_ids
 """
 
+import hashlib
+import json
+import logging
 import os
 import random
 from pathlib import Path
@@ -25,10 +28,19 @@ from datasets import load_dataset, Dataset
 
 from .datasets import LOADERS as _DATA_LOADERS, load_llaga_processed_data as _load_llaga_processed_data
 
+logger = logging.getLogger(__name__)
+
 # Default HuggingFace cache root
 HF_CACHE_ROOT = Path(
     os.environ.get("HF_DATASETS_CACHE", Path.home() / "datasets" / "huggingface")
 )
+# Persistent on-disk cache for built TAG datasets. Keyed by all args that
+# affect sample content (dataset, tokenizer, prompt format, sampling seed,
+# etc.). DDP rank 0 builds, ranks 1+ load from disk in seconds.
+TAG_CACHE_ROOT = Path(
+    os.environ.get("TMDLM_TAG_CACHE_ROOT", HF_CACHE_ROOT / "tmdlm_tag_cache")
+)
+_TAG_CACHE_VERSION = 1
 LLAGA_DATA_ROOT = Path(
     os.environ.get(
         "LLAGA_DATA_ROOT",
@@ -1161,6 +1173,76 @@ def _build_tag_samples(
 
 
 
+def _tag_dataset_cache_key(
+    *,
+    dataset_name,
+    tokenizer,
+    split,
+    max_seq_len,
+    max_neighbors_per_hop,
+    max_hops,
+    seed,
+    mask_target_text,
+    max_answer_tokens,
+    prompt_layout,
+    use_chat_template,
+    prompt_format,
+    answer_label_style,
+    include_neighbor_labels,
+    neighbor_label_format,
+    include_options,
+    mask_neighbor_labels,
+    max_samples,
+    balance_merged,
+    resample_strategy,
+    boost_spec,
+) -> str:
+    """Hash all args that affect sample content into a 16-hex cache key."""
+    if isinstance(dataset_name, (list, tuple)):
+        ds_repr = "+".join(sorted(str(d) for d in dataset_name))
+    else:
+        ds_repr = str(dataset_name)
+    payload = {
+        "version": _TAG_CACHE_VERSION,
+        "dataset_name": ds_repr,
+        "tokenizer": getattr(tokenizer, "name_or_path", "unknown"),
+        "vocab_size": len(tokenizer),
+        "split": split,
+        "max_seq_len": int(max_seq_len),
+        "max_neighbors_per_hop": int(max_neighbors_per_hop),
+        "max_hops": int(max_hops),
+        "seed": int(seed),
+        "mask_target_text": bool(mask_target_text),
+        "max_answer_tokens": int(max_answer_tokens),
+        "prompt_layout": prompt_layout,
+        "use_chat_template": bool(use_chat_template),
+        "prompt_format": prompt_format,
+        "answer_label_style": answer_label_style,
+        "include_neighbor_labels": bool(include_neighbor_labels),
+        "neighbor_label_format": neighbor_label_format,
+        "include_options": bool(include_options),
+        "mask_neighbor_labels": bool(mask_neighbor_labels),
+        "max_samples": int(max_samples or 0),
+        "balance_merged": bool(balance_merged),
+        "resample_strategy": resample_strategy,
+        "boost_spec": boost_spec,
+    }
+    blob = json.dumps(payload, sort_keys=True).encode()
+    return hashlib.sha1(blob).hexdigest()[:16]
+
+
+def _tag_save_to_cache(dataset: Dataset, cache_dir: Path) -> None:
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        # save_to_disk requires an empty / new dir
+        if (cache_dir / "dataset_info.json").exists():
+            return
+        dataset.save_to_disk(str(cache_dir))
+        logger.info("[tag-cache] saved → %s (%d samples)", cache_dir, len(dataset))
+    except Exception as e:  # pragma: no cover - non-fatal cache miss
+        logger.warning("[tag-cache] save failed for %s: %s", cache_dir, e)
+
+
 def load_tag_dataset(
     dataset_name,
     tokenizer,
@@ -1200,7 +1282,51 @@ def load_tag_dataset(
     `min(per-dataset sample counts)` before concatenation, so every dataset
     contributes the same number of samples. Useful when one dataset is much
     larger and would otherwise dominate the gradient.
+
+    On-disk cache: built samples are hashed (all args that affect content)
+    and persisted under ``TAG_CACHE_ROOT``. Subsequent calls with the same
+    args reload in seconds via ``Dataset.load_from_disk``. This is what lets
+    DDP rank 0's "dataset prep" finish well within the NCCL bootstrap
+    timeout window, instead of re-tokenizing every sample on each launch.
     """
+    cache_key = _tag_dataset_cache_key(
+        dataset_name=dataset_name,
+        tokenizer=tokenizer,
+        split=split,
+        max_seq_len=max_seq_len,
+        max_neighbors_per_hop=max_neighbors_per_hop,
+        max_hops=max_hops,
+        seed=seed,
+        mask_target_text=mask_target_text,
+        max_answer_tokens=max_answer_tokens,
+        prompt_layout=prompt_layout,
+        use_chat_template=use_chat_template,
+        prompt_format=prompt_format,
+        answer_label_style=answer_label_style,
+        include_neighbor_labels=include_neighbor_labels,
+        neighbor_label_format=neighbor_label_format,
+        include_options=include_options,
+        mask_neighbor_labels=mask_neighbor_labels,
+        max_samples=max_samples,
+        balance_merged=balance_merged,
+        resample_strategy=resample_strategy,
+        boost_spec=boost_spec,
+    )
+    cache_dir = TAG_CACHE_ROOT / cache_key
+    if (cache_dir / "dataset_info.json").exists():
+        try:
+            ds = Dataset.load_from_disk(str(cache_dir))
+            logger.info(
+                "[tag-cache] hit %s (%d samples) ← %s",
+                cache_key, len(ds), cache_dir,
+            )
+            return ds
+        except Exception as e:  # pragma: no cover - cache corruption fallback
+            logger.warning(
+                "[tag-cache] load failed for %s (%s); rebuilding",
+                cache_dir, e,
+            )
+
     if isinstance(dataset_name, (list, tuple)):
         names = list(dataset_name)
         if not names:
@@ -1282,6 +1408,7 @@ def load_tag_dataset(
                 f"{n}={per_dataset_counts[n]}" for n in names
             )
         )
+        _tag_save_to_cache(dataset, cache_dir)
         return dataset
 
     if dataset_name not in DATASET_CONFIGS:
@@ -1338,6 +1465,7 @@ def load_tag_dataset(
     dataset.info.description = (
         f"TM-DLM {dataset_name} ({split}), {len(class_names)} classes"
     )
+    _tag_save_to_cache(dataset, cache_dir)
     return dataset
 
 
