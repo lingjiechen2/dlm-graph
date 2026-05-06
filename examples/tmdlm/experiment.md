@@ -47,11 +47,13 @@ H2（LoRA 容量不足）是真实因素但**不是主因**，剩余 gap 要靠�
 | arxiv 类标签 | `cs.CL idx 30 = "Computational Complexity"`（与 cs.CC 字面同名） | `cs.CL idx 30 = "Computation and Language"` | LLaGA 缓存抄错；cs.CC 33% acc / cs.CL 85% acc 两类互相挤占（fix 已合并 commit `344c379`） |
 | answer label style | `digit0` → `"0".."39"`（10 个 1-token + 30 个 2-token） | `digit0_pad` → `"00".."39"`（全部 2-token） | 旧格式下 1-token 类（cs.NA/cs.MM/cs.CY 等）在第 0 位 logit 与 2-token 类前缀冲突 (`'1'` 既是 class 1 也是 10–19 的 prefix)，calibration 系统性不公平；6 个 1-token 类 acc 直接 0% |
 | LoRA 容量 | r=alpha=64（167M trainable，2.05% 模型参数） | r=alpha=128（335M trainable，4.1% 模型参数） | §16 cora 验证 r=128 闭合一半 gap；arxiv 40 类 capacity 瓶颈更紧，预期收益更大 |
-| class boost | none（按 train 自然分布） | `Machine Learning:3.0, Artificial Intelligence:2.0, Neural and Evolutionary Computing:2.0` | cs.LG 是 22.10% test 占比但 7.69% train 占比（OGB 时间切分 → 2.87× 分布偏移），acc 56-59% 是整体瓶颈；cs.AI / cs.NE 是 cs.LG 的混淆密集区 |
+| class boost | none（按 train 自然分布） | `ogbn-arxiv:cs.LG(Machine Learning):3, ogbn-arxiv:cs.AI(Artificial Intelligence):2, ogbn-arxiv:cs.NE(Neural and Evolutionary Computing):2` | cs.LG 是 22.10% test 占比但 7.69% train 占比（OGB 时间切分 → 2.87× 分布偏移），acc 56-59% 是整体瓶颈；cs.AI / cs.NE 是 cs.LG 的混淆密集区 |
+
+注意 boost 在 `max_samples` cap *之后* 应用：cap 20000 后 cs.LG 约 1538 个样本，×3 boost 复制为 4614（多 3076）；cs.AI ×2 多 1140；cs.NE ×2 多 284。**post-boost 数据集 = 24,500 样本**。要保持原 §20 的 4 epoch 设计需对应调高 `max_steps`：4 × 24500 / 48 ≈ 2042，故新 launcher 用 `max_steps=2042`（旧值 1668 对应 3.27 epoch）。
 
 ### 不变项（沿用 §20）
 
-`max_seq_len=4096`, `max_hops=2`, `max_neighbors_per_hop=10`, `prompt_format=mc_digit`, `max_answer_tokens=2`, `include_neighbor_labels=False`, `position_id_type=sequential`, `use_topology_mask=True` (topo only), `max_train_samples=20000`, `max_steps=1668` (4 epoch over 20k @ eff_bs 48), `learning_rate=5e-5`, `save_steps=0.1` (10 ckpts), `eval_strategy=no`, `target_modules=all-linear`, `gradient_checkpointing=True`, `cls_loss_weight=0.0`. 4-GPU DDP via torchrun (per_device_batch=3, grad_accum=4, world=4 → eff_bs=48), trap auto-claims GPU 1,2,3,5 with sample_gen on exit.
+`max_seq_len=4096`, `max_hops=2`, `max_neighbors_per_hop=10`, `prompt_format=mc_digit`, `max_answer_tokens=2`, `include_neighbor_labels=False`, `position_id_type=sequential`, `use_topology_mask=True` (topo only), `max_train_samples=20000` (pre-boost cap), `learning_rate=5e-5`, `save_steps=0.1` (10 ckpts), `save_total_limit=3` (磁盘紧张时只保留最近 3 个 + final), `eval_strategy=no`, `target_modules=all-linear`, `gradient_checkpointing=True`, `cls_loss_weight=0.0`. 4-GPU DDP via torchrun (per_device_batch=3, grad_accum=4, world=4 → eff_bs=48 = §20 单 GPU eff_bs 一致), trap auto-claims GPU 1,2,3,5 with sample_gen on exit.
 
 ### 预期收益（按贡献从大到小）
 
@@ -65,4 +67,4 @@ H2（LoRA 容量不足）是真实因素但**不是主因**，剩余 gap 要靠�
 
 ### 训练时长
 
-r=128 比 r=64 略慢（额外 167M trainable param 的 forward/backward），预计 32 sec/step → 35-37 sec/step。1668 step × 36 sec ≈ **~17 h**。完成时刻取决于启动时间。
+r=128 比 r=64 略慢（额外 167M trainable param 的 forward/backward），预计 32 sec/step → 35-37 sec/step。**2042 step × 36 sec ≈ ~20.4 h**。完成时刻取决于启动时间。
