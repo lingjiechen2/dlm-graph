@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -22,6 +23,23 @@ _PUBMED_LLAGA_NAME_MAP = {
     "Diabetes Mellitus Type1": "Diabetes Mellitus Type 1",
     "Diabetes Mellitus Type2": "Diabetes Mellitus Type 2",
 }
+
+
+# Per-dataset class_name overrides for known LLaGA-cache mistakes.
+# arxiv: idx 30 cs.CL was duplicated as "Computational Complexity" (cs.CC's
+# name); the correct OGB / arxiv canonical name is "Computation and Language"
+# (NLP / linguistics subfield). Verified against arxiv.org/category_taxonomy.
+_LLAGA_CLASS_OVERRIDES: dict[str, dict[int, str]] = {
+    "ogbn-arxiv": {30: "cs.CL(Computation and Language)"},
+}
+
+# Leading-prefix patterns to strip per-dataset on title/abstract fields.
+# cora's LLaGA cache stores ~98% of titles literally starting with "Title: "
+# and ~90% of abstracts literally starting with "Abstract: ", which would
+# otherwise produce double-prefix prompts like "Paper: Title: <real title>".
+_TITLE_PREFIX_RE = re.compile(r"^Title:\s*", flags=re.IGNORECASE)
+_ABSTRACT_PREFIX_RE = re.compile(r"^Abstract:\s*", flags=re.IGNORECASE)
+_DATASETS_WITH_FIELD_PREFIX = {"cora"}
 
 
 def normalize_llaga_class_name(name: str) -> str:
@@ -50,11 +68,23 @@ def load_llaga_processed_data(
         edge_index = edge_index.cpu().numpy()
     adj = build_adjacency(edge_index)
 
+    # Identify the dataset from the cache directory name so we can apply
+    # per-dataset overrides for known LLaGA-cache bugs.
+    dataset_name = Path(llaga_dir).name
+
     class_names = [normalize_llaga_class_name(x) for x in list(data["label_texts"])]
+    overrides = _LLAGA_CLASS_OVERRIDES.get(dataset_name, {})
+    for idx, new_name in overrides.items():
+        if 0 <= idx < len(class_names):
+            class_names[idx] = normalize_llaga_class_name(new_name)
 
     n = int(data["num_nodes"])
     titles = list(data["title"]) if "title" in data else [""] * n
     abstracts = list(data["abs"]) if "abs" in data else [""] * n
+    if dataset_name in _DATASETS_WITH_FIELD_PREFIX:
+        titles = [_TITLE_PREFIX_RE.sub("", str(t).strip()) for t in titles]
+        abstracts = [_ABSTRACT_PREFIX_RE.sub("", str(a).strip()) for a in abstracts]
+
     labels = data["y"]
     if hasattr(labels, "cpu"):
         labels = labels.cpu().tolist()

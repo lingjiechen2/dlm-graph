@@ -40,7 +40,7 @@ HF_CACHE_ROOT = Path(
 TAG_CACHE_ROOT = Path(
     os.environ.get("TMDLM_TAG_CACHE_ROOT", HF_CACHE_ROOT / "tmdlm_tag_cache")
 )
-_TAG_CACHE_VERSION = 1
+_TAG_CACHE_VERSION = 2  # bumped for arxiv cs.CL fix + cora double-prefix strip
 LLAGA_DATA_ROOT = Path(
     os.environ.get(
         "LLAGA_DATA_ROOT",
