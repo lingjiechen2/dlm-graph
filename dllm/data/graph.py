@@ -237,7 +237,7 @@ def _sample_khop_neighbors(
 # ---------------------------------------------------------------------------
 
 
-ANSWER_LABEL_STYLES = ("digit0", "number1", "letter")
+ANSWER_LABEL_STYLES = ("digit0", "digit0_pad", "number1", "letter")
 
 
 def get_answer_labels(
@@ -248,12 +248,16 @@ def get_answer_labels(
     Generate answer labels for MC format.
 
     Styles:
-      - digit0:  "0", "1", ..., "N-1"
-      - number1: "1", "2", ..., "N"
-      - letter:  "a", "b", ..., "z", "aa", ...
+      - digit0:      "0", "1", ..., "N-1"   (single digits 0-9 are 1 token, 10+ are 2 tokens)
+      - digit0_pad:  "00", "01", ...        (zero-padded so every label has uniform token length)
+      - number1:     "1", "2", ..., "N"
+      - letter:      "a", "b", ..., "z", "aa", ...
     """
     if style == "digit0":
         return [str(i) for i in range(num_classes)]
+    if style == "digit0_pad":
+        width = max(2, len(str(max(num_classes - 1, 0))))
+        return [str(i).zfill(width) for i in range(num_classes)]
     if style == "number1":
         return [str(i + 1) for i in range(num_classes)]
     if style == "letter":
