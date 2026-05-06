@@ -53,7 +53,7 @@ H2（LoRA 容量不足）是真实因素但**不是主因**，剩余 gap 要靠�
 
 ### 不变项（沿用 §20）
 
-`max_seq_len=4096`, `max_hops=2`, `max_neighbors_per_hop=10`, `prompt_format=mc_digit`, `max_answer_tokens=2`, `include_neighbor_labels=False`, `position_id_type=sequential`, `use_topology_mask=True` (topo only), `max_train_samples=20000` (pre-boost cap), `learning_rate=5e-5`, `save_steps=0.1` (10 ckpts), `save_total_limit=3` (磁盘紧张时只保留最近 3 个 + final), `eval_strategy=no`, `target_modules=all-linear`, `gradient_checkpointing=True`, `cls_loss_weight=0.0`. 4-GPU DDP via torchrun (per_device_batch=3, grad_accum=4, world=4 → eff_bs=48 = §20 单 GPU eff_bs 一致), trap auto-claims GPU 1,2,3,5 with sample_gen on exit.
+`max_seq_len=4096`, `max_hops=2`, `max_neighbors_per_hop=10`, `prompt_format=mc_digit`, `max_answer_tokens=2`, `include_neighbor_labels=False`, `position_id_type=sequential`, `use_topology_mask=True` (topo only), `max_train_samples=20000` (pre-boost cap), `learning_rate=5e-5`, `save_steps=0.1` (10 ckpts，全保留，无 save_total_limit), `eval_strategy=no`, `target_modules=all-linear`, `gradient_checkpointing=True`, `cls_loss_weight=0.0`. 4-GPU DDP via torchrun (per_device_batch=3, grad_accum=4, world=4 → eff_bs=48 = §20 单 GPU eff_bs 一致), trap auto-claims GPU 1,2,3,5 with sample_gen on exit.
 
 ### 预期收益（按贡献从大到小）
 
