@@ -1,0 +1,19 @@
+{"method": "E5. confidence-weighted vote", "ckpt": "1845", "acc": 76.0}
+{"method": "E4. plurality vote (raw)", "ckpt": "1845", "acc": 75.8}
+{"method": "Standalone s2_nb15", "ckpt": "1845", "acc": 75.4}
+{"method": "Standalone nb12", "ckpt": "1845", "acc": 75.4}
+{"method": "Standalone nb30", "ckpt": "1845", "acc": 75.3}
+{"method": "E1. mean-pool all (12 settings, raw)", "ckpt": "1845", "acc": 75.3}
+{"method": "E2. mean-pool + best tau (=0.00, oracle)", "ckpt": "1845", "acc": 75.3}
+{"method": "E3. CV-fit weights (baseline=0.08, s1_nb5=0.08, s2_nb15=0.08, s3_nb20=0.08, s4_hops1=0.09, s5_hops3=0.08, s6_notopo=0.09, nb12=0.08, nb15h1notopo=0.09, nb18=0.08, nb25=0.08, nb30=0.08)", "ckpt": "1845", "acc": 75.3}
+{"method": "Standalone nb15h1notopo", "ckpt": "1845", "acc": 75.2}
+{"method": "Standalone s3_nb20", "ckpt": "1845", "acc": 75.1}
+{"method": "Standalone nb18", "ckpt": "1845", "acc": 75.0}
+{"method": "Standalone s4_hops1", "ckpt": "1845", "acc": 74.9}
+{"method": "Standalone nb25", "ckpt": "1845", "acc": 74.9}
+{"method": "Standalone s6_notopo", "ckpt": "1845", "acc": 74.8}
+{"method": "Standalone baseline (1845, defaults)", "ckpt": "1845", "acc": 74.4}
+{"method": "Standalone s5_hops3", "ckpt": "1845", "acc": 74.4}
+{"method": "Standalone s1_nb5", "ckpt": "1845", "acc": 74.0}
+{"method": "E1. mean-pool all (cal tau=1)", "ckpt": "1845", "acc": 69.0}
+{"method": "E6. mean-pool then argmax-of-cal-each (mean-after-cal)", "ckpt": "1845", "acc": 69.0}

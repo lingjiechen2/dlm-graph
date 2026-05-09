@@ -1,0 +1,18 @@
+{"method": "K. per-class-bias (5-fold CV fit)", "ckpt": "1640", "acc": 72.39999999999999}
+{"method": "K. per-class-bias (5-fold CV fit)", "ckpt": "1845", "acc": 73.6}
+{"method": "K. per-class-bias (5-fold CV fit)", "ckpt": "2042", "acc": 73.6}
+{"method": "K. per-class-bias (5-fold CV fit)", "ckpt": "final", "acc": 73.5}
+{"method": "M. alpha-mix CV (5-fold)", "ckpt": "1640", "acc": 73.5}
+{"method": "M. alpha-mix CV (5-fold)", "ckpt": "1845", "acc": 74.1}
+{"method": "M. alpha-mix CV (5-fold)", "ckpt": "2042", "acc": 73.8}
+{"method": "M. alpha-mix CV (5-fold)", "ckpt": "final", "acc": 73.4}
+{"method": "N. weighted-ensemble fit (avg w: 1640=0.17+1845=0.28+2042=0.27+final=0.27)", "ckpt": "ALL", "acc": 74.3}
+{"method": "N+M. weighted-ensemble + alpha-cal CV", "ckpt": "ALL", "acc": 73.1}
+{"method": "P. diag cs.LG(Machine Learning)", "ckpt": "1845", "acc": 74.42922374429224, "n": 219, "errors": 56, "top_confusion_to": "cs.CV(Computer Vision and", "top_confusion_n": 13}
+{"method": "P. diag cs.CV(Computer Vision and", "ckpt": "1845", "acc": 89.70588235294117, "n": 204, "errors": 21, "top_confusion_to": "cs.LG(Machine Learning)", "top_confusion_n": 12}
+{"method": "P. diag cs.AI(Artificial Intellig", "ckpt": "1845", "acc": 61.111111111111114, "n": 36, "errors": 14, "top_confusion_to": "cs.CL(Computation and Lan", "top_confusion_n": 5}
+{"method": "P. diag cs.RO(Robotics)", "ckpt": "1845", "acc": 64.1025641025641, "n": 39, "errors": 14, "top_confusion_to": "cs.CV(Computer Vision and", "top_confusion_n": 5}
+{"method": "P. diag cs.CL(Computation and Lan", "ckpt": "1845", "acc": 86.5979381443299, "n": 97, "errors": 13, "top_confusion_to": "cs.AI(Artificial Intellig", "top_confusion_n": 5}
+{"method": "P. diag cs.DC(Distributed, Parall", "ckpt": "1845", "acc": 50.0, "n": 22, "errors": 11, "top_confusion_to": "cs.CR(Cryptography and Se", "top_confusion_n": 3}
+{"method": "P. diag cs.IR(Information Retriev", "ckpt": "1845", "acc": 45.0, "n": 20, "errors": 11, "top_confusion_to": "cs.LG(Machine Learning)", "top_confusion_n": 3}
+{"method": "P. diag cs.HC(Human-Computer Inte", "ckpt": "1845", "acc": 47.368421052631575, "n": 19, "errors": 10, "top_confusion_to": "cs.CV(Computer Vision and", "top_confusion_n": 3}

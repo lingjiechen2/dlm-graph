@@ -1,0 +1,108 @@
+{"method": "baseline (raw)", "ckpt": "1640", "acc": 73.9}
+{"method": "N1. low-conf fallback gap<0.05", "ckpt": "1640", "acc": 73.9, "n_changed": 181}
+{"method": "N1. low-conf fallback gap<0.1", "ckpt": "1640", "acc": 72.3, "n_changed": 301}
+{"method": "N1. low-conf fallback gap<0.15", "ckpt": "1640", "acc": 70.0, "n_changed": 413}
+{"method": "N1. low-conf fallback gap<0.2", "ckpt": "1640", "acc": 69.1, "n_changed": 486}
+{"method": "N1. low-conf fallback gap<0.3", "ckpt": "1640", "acc": 67.4, "n_changed": 590}
+{"method": "O1. logits + 0.0\u00b7log p_neighbor", "ckpt": "1640", "acc": 73.9}
+{"method": "O1. logits + 0.1\u00b7log p_neighbor", "ckpt": "1640", "acc": 71.8}
+{"method": "O1. logits + 0.3\u00b7log p_neighbor", "ckpt": "1640", "acc": 72.39999999999999}
+{"method": "O1. logits + 0.5\u00b7log p_neighbor", "ckpt": "1640", "acc": 72.39999999999999}
+{"method": "O1. logits + 0.7\u00b7log p_neighbor", "ckpt": "1640", "acc": 71.6}
+{"method": "O1. logits + 1.0\u00b7log p_neighbor", "ckpt": "1640", "acc": 71.39999999999999}
+{"method": "O1. logits + 1.5\u00b7log p_neighbor", "ckpt": "1640", "acc": 70.89999999999999}
+{"method": "O1. logits + 2.0\u00b7log p_neighbor", "ckpt": "1640", "acc": 70.19999999999999}
+{"method": "O2. logits + 0.3\u00b7log p_neigh - 0.0\u00b7prior", "ckpt": "1640", "acc": 72.39999999999999}
+{"method": "O2. logits + 0.3\u00b7log p_neigh - 0.2\u00b7prior", "ckpt": "1640", "acc": 72.3}
+{"method": "O2. logits + 0.3\u00b7log p_neigh - 0.5\u00b7prior", "ckpt": "1640", "acc": 72.39999999999999}
+{"method": "O2. logits + 0.5\u00b7log p_neigh - 0.0\u00b7prior", "ckpt": "1640", "acc": 72.39999999999999}
+{"method": "O2. logits + 0.5\u00b7log p_neigh - 0.2\u00b7prior", "ckpt": "1640", "acc": 72.5}
+{"method": "O2. logits + 0.5\u00b7log p_neigh - 0.5\u00b7prior", "ckpt": "1640", "acc": 72.2}
+{"method": "O2. logits + 1.0\u00b7log p_neigh - 0.0\u00b7prior", "ckpt": "1640", "acc": 71.39999999999999}
+{"method": "O2. logits + 1.0\u00b7log p_neigh - 0.2\u00b7prior", "ckpt": "1640", "acc": 71.5}
+{"method": "O2. logits + 1.0\u00b7log p_neigh - 0.5\u00b7prior", "ckpt": "1640", "acc": 72.0}
+{"method": "O3. hard-override neigh majority \u22650.6", "ckpt": "1640", "acc": 71.3}
+{"method": "O3. hard-override neigh majority \u22650.7", "ckpt": "1640", "acc": 72.6}
+{"method": "O3. hard-override neigh majority \u22650.8", "ckpt": "1640", "acc": 72.6}
+{"method": "O3. hard-override neigh majority \u22650.9", "ckpt": "1640", "acc": 72.7}
+{"method": "baseline (raw)", "ckpt": "1845", "acc": 74.4}
+{"method": "N1. low-conf fallback gap<0.05", "ckpt": "1845", "acc": 74.6, "n_changed": 144}
+{"method": "N1. low-conf fallback gap<0.1", "ckpt": "1845", "acc": 73.3, "n_changed": 248}
+{"method": "N1. low-conf fallback gap<0.15", "ckpt": "1845", "acc": 71.89999999999999, "n_changed": 331}
+{"method": "N1. low-conf fallback gap<0.2", "ckpt": "1845", "acc": 70.89999999999999, "n_changed": 396}
+{"method": "N1. low-conf fallback gap<0.3", "ckpt": "1845", "acc": 68.4, "n_changed": 521}
+{"method": "O1. logits + 0.0\u00b7log p_neighbor", "ckpt": "1845", "acc": 74.4}
+{"method": "O1. logits + 0.1\u00b7log p_neighbor", "ckpt": "1845", "acc": 72.89999999999999}
+{"method": "O1. logits + 0.3\u00b7log p_neighbor", "ckpt": "1845", "acc": 72.6}
+{"method": "O1. logits + 0.5\u00b7log p_neighbor", "ckpt": "1845", "acc": 72.6}
+{"method": "O1. logits + 0.7\u00b7log p_neighbor", "ckpt": "1845", "acc": 72.0}
+{"method": "O1. logits + 1.0\u00b7log p_neighbor", "ckpt": "1845", "acc": 71.39999999999999}
+{"method": "O1. logits + 1.5\u00b7log p_neighbor", "ckpt": "1845", "acc": 70.89999999999999}
+{"method": "O1. logits + 2.0\u00b7log p_neighbor", "ckpt": "1845", "acc": 70.7}
+{"method": "O2. logits + 0.3\u00b7log p_neigh - 0.0\u00b7prior", "ckpt": "1845", "acc": 72.6}
+{"method": "O2. logits + 0.3\u00b7log p_neigh - 0.2\u00b7prior", "ckpt": "1845", "acc": 72.6}
+{"method": "O2. logits + 0.3\u00b7log p_neigh - 0.5\u00b7prior", "ckpt": "1845", "acc": 73.1}
+{"method": "O2. logits + 0.5\u00b7log p_neigh - 0.0\u00b7prior", "ckpt": "1845", "acc": 72.6}
+{"method": "O2. logits + 0.5\u00b7log p_neigh - 0.2\u00b7prior", "ckpt": "1845", "acc": 72.8}
+{"method": "O2. logits + 0.5\u00b7log p_neigh - 0.5\u00b7prior", "ckpt": "1845", "acc": 73.3}
+{"method": "O2. logits + 1.0\u00b7log p_neigh - 0.0\u00b7prior", "ckpt": "1845", "acc": 71.39999999999999}
+{"method": "O2. logits + 1.0\u00b7log p_neigh - 0.2\u00b7prior", "ckpt": "1845", "acc": 72.3}
+{"method": "O2. logits + 1.0\u00b7log p_neigh - 0.5\u00b7prior", "ckpt": "1845", "acc": 72.1}
+{"method": "O3. hard-override neigh majority \u22650.6", "ckpt": "1845", "acc": 71.3}
+{"method": "O3. hard-override neigh majority \u22650.7", "ckpt": "1845", "acc": 72.5}
+{"method": "O3. hard-override neigh majority \u22650.8", "ckpt": "1845", "acc": 72.8}
+{"method": "O3. hard-override neigh majority \u22650.9", "ckpt": "1845", "acc": 73.1}
+{"method": "baseline (raw)", "ckpt": "2042", "acc": 74.2}
+{"method": "N1. low-conf fallback gap<0.05", "ckpt": "2042", "acc": 74.7, "n_changed": 145}
+{"method": "N1. low-conf fallback gap<0.1", "ckpt": "2042", "acc": 73.3, "n_changed": 249}
+{"method": "N1. low-conf fallback gap<0.15", "ckpt": "2042", "acc": 72.0, "n_changed": 334}
+{"method": "N1. low-conf fallback gap<0.2", "ckpt": "2042", "acc": 70.8, "n_changed": 405}
+{"method": "N1. low-conf fallback gap<0.3", "ckpt": "2042", "acc": 68.30000000000001, "n_changed": 529}
+{"method": "O1. logits + 0.0\u00b7log p_neighbor", "ckpt": "2042", "acc": 74.2}
+{"method": "O1. logits + 0.1\u00b7log p_neighbor", "ckpt": "2042", "acc": 72.6}
+{"method": "O1. logits + 0.3\u00b7log p_neighbor", "ckpt": "2042", "acc": 72.39999999999999}
+{"method": "O1. logits + 0.5\u00b7log p_neighbor", "ckpt": "2042", "acc": 72.5}
+{"method": "O1. logits + 0.7\u00b7log p_neighbor", "ckpt": "2042", "acc": 72.0}
+{"method": "O1. logits + 1.0\u00b7log p_neighbor", "ckpt": "2042", "acc": 71.6}
+{"method": "O1. logits + 1.5\u00b7log p_neighbor", "ckpt": "2042", "acc": 71.1}
+{"method": "O1. logits + 2.0\u00b7log p_neighbor", "ckpt": "2042", "acc": 70.6}
+{"method": "O2. logits + 0.3\u00b7log p_neigh - 0.0\u00b7prior", "ckpt": "2042", "acc": 72.39999999999999}
+{"method": "O2. logits + 0.3\u00b7log p_neigh - 0.2\u00b7prior", "ckpt": "2042", "acc": 72.5}
+{"method": "O2. logits + 0.3\u00b7log p_neigh - 0.5\u00b7prior", "ckpt": "2042", "acc": 73.1}
+{"method": "O2. logits + 0.5\u00b7log p_neigh - 0.0\u00b7prior", "ckpt": "2042", "acc": 72.5}
+{"method": "O2. logits + 0.5\u00b7log p_neigh - 0.2\u00b7prior", "ckpt": "2042", "acc": 72.8}
+{"method": "O2. logits + 0.5\u00b7log p_neigh - 0.5\u00b7prior", "ckpt": "2042", "acc": 72.89999999999999}
+{"method": "O2. logits + 1.0\u00b7log p_neigh - 0.0\u00b7prior", "ckpt": "2042", "acc": 71.6}
+{"method": "O2. logits + 1.0\u00b7log p_neigh - 0.2\u00b7prior", "ckpt": "2042", "acc": 72.1}
+{"method": "O2. logits + 1.0\u00b7log p_neigh - 0.5\u00b7prior", "ckpt": "2042", "acc": 72.0}
+{"method": "O3. hard-override neigh majority \u22650.6", "ckpt": "2042", "acc": 71.39999999999999}
+{"method": "O3. hard-override neigh majority \u22650.7", "ckpt": "2042", "acc": 72.5}
+{"method": "O3. hard-override neigh majority \u22650.8", "ckpt": "2042", "acc": 72.8}
+{"method": "O3. hard-override neigh majority \u22650.9", "ckpt": "2042", "acc": 73.0}
+{"method": "baseline (raw)", "ckpt": "final", "acc": 74.2}
+{"method": "N1. low-conf fallback gap<0.05", "ckpt": "final", "acc": 74.7, "n_changed": 145}
+{"method": "N1. low-conf fallback gap<0.1", "ckpt": "final", "acc": 73.3, "n_changed": 249}
+{"method": "N1. low-conf fallback gap<0.15", "ckpt": "final", "acc": 72.0, "n_changed": 334}
+{"method": "N1. low-conf fallback gap<0.2", "ckpt": "final", "acc": 70.8, "n_changed": 405}
+{"method": "N1. low-conf fallback gap<0.3", "ckpt": "final", "acc": 68.30000000000001, "n_changed": 529}
+{"method": "O1. logits + 0.0\u00b7log p_neighbor", "ckpt": "final", "acc": 74.2}
+{"method": "O1. logits + 0.1\u00b7log p_neighbor", "ckpt": "final", "acc": 72.6}
+{"method": "O1. logits + 0.3\u00b7log p_neighbor", "ckpt": "final", "acc": 72.39999999999999}
+{"method": "O1. logits + 0.5\u00b7log p_neighbor", "ckpt": "final", "acc": 72.5}
+{"method": "O1. logits + 0.7\u00b7log p_neighbor", "ckpt": "final", "acc": 72.0}
+{"method": "O1. logits + 1.0\u00b7log p_neighbor", "ckpt": "final", "acc": 71.6}
+{"method": "O1. logits + 1.5\u00b7log p_neighbor", "ckpt": "final", "acc": 71.1}
+{"method": "O1. logits + 2.0\u00b7log p_neighbor", "ckpt": "final", "acc": 70.6}
+{"method": "O2. logits + 0.3\u00b7log p_neigh - 0.0\u00b7prior", "ckpt": "final", "acc": 72.39999999999999}
+{"method": "O2. logits + 0.3\u00b7log p_neigh - 0.2\u00b7prior", "ckpt": "final", "acc": 72.5}
+{"method": "O2. logits + 0.3\u00b7log p_neigh - 0.5\u00b7prior", "ckpt": "final", "acc": 73.1}
+{"method": "O2. logits + 0.5\u00b7log p_neigh - 0.0\u00b7prior", "ckpt": "final", "acc": 72.5}
+{"method": "O2. logits + 0.5\u00b7log p_neigh - 0.2\u00b7prior", "ckpt": "final", "acc": 72.8}
+{"method": "O2. logits + 0.5\u00b7log p_neigh - 0.5\u00b7prior", "ckpt": "final", "acc": 72.89999999999999}
+{"method": "O2. logits + 1.0\u00b7log p_neigh - 0.0\u00b7prior", "ckpt": "final", "acc": 71.6}
+{"method": "O2. logits + 1.0\u00b7log p_neigh - 0.2\u00b7prior", "ckpt": "final", "acc": 72.1}
+{"method": "O2. logits + 1.0\u00b7log p_neigh - 0.5\u00b7prior", "ckpt": "final", "acc": 72.0}
+{"method": "O3. hard-override neigh majority \u22650.6", "ckpt": "final", "acc": 71.39999999999999}
+{"method": "O3. hard-override neigh majority \u22650.7", "ckpt": "final", "acc": 72.5}
+{"method": "O3. hard-override neigh majority \u22650.8", "ckpt": "final", "acc": 72.8}
+{"method": "O3. hard-override neigh majority \u22650.9", "ckpt": "final", "acc": 73.0}
