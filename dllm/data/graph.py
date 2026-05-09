@@ -1120,13 +1120,18 @@ def _build_tag_samples(
     neighbor_label_format: str = "bracket",
     include_options: bool = True,
     mask_neighbor_labels: bool = False,
+    neighbor_seed: int | None = None,
 ) -> list[dict]:
-    """Build TM-DLM samples for a list of node IDs (shared across all datasets)."""
+    """Build TM-DLM samples for a list of node IDs (shared across all datasets).
+
+    neighbor_seed: if set, governs neighbor sampling RNG independently of `seed`.
+    Used at eval-time to do TTA with fixed sample selection but jittered neighbors.
+    """
     answer_labels = get_answer_labels(
         len(class_names),
         style=answer_label_style,
     )
-    rng = random.Random(seed)
+    rng = random.Random(seed if neighbor_seed is None else neighbor_seed)
     samples = []
 
     for node_id in split_ids:
@@ -1200,6 +1205,7 @@ def _tag_dataset_cache_key(
     balance_merged,
     resample_strategy,
     boost_spec,
+    neighbor_seed=None,
 ) -> str:
     """Hash all args that affect sample content into a 16-hex cache key."""
     if isinstance(dataset_name, (list, tuple)):
@@ -1231,6 +1237,8 @@ def _tag_dataset_cache_key(
         "resample_strategy": resample_strategy,
         "boost_spec": boost_spec,
     }
+    if neighbor_seed is not None:
+        payload["neighbor_seed"] = int(neighbor_seed)
     blob = json.dumps(payload, sort_keys=True).encode()
     return hashlib.sha1(blob).hexdigest()[:16]
 
@@ -1269,6 +1277,7 @@ def load_tag_dataset(
     balance_merged: bool = False,
     resample_strategy: str = "none",
     boost_spec: str = "",
+    neighbor_seed: int | None = None,
 ) -> Dataset:
     """
     Load a TAG dataset and return a HuggingFace Dataset of TM-DLM samples.
@@ -1315,6 +1324,7 @@ def load_tag_dataset(
         balance_merged=balance_merged,
         resample_strategy=resample_strategy,
         boost_spec=boost_spec,
+        neighbor_seed=neighbor_seed,
     )
     cache_dir = TAG_CACHE_ROOT / cache_key
     if (cache_dir / "dataset_info.json").exists():
@@ -1425,7 +1435,8 @@ def load_tag_dataset(
     )
 
     if max_samples and max_samples > 0:
-        split_ids = split_ids[:max_samples]
+        rng = random.Random(seed)
+        split_ids = rng.sample(list(split_ids), min(max_samples, len(split_ids)))
 
     samples = _build_tag_samples(
         split_ids,
@@ -1447,6 +1458,7 @@ def load_tag_dataset(
         neighbor_label_format=neighbor_label_format,
         include_options=include_options,
         mask_neighbor_labels=mask_neighbor_labels,
+        neighbor_seed=neighbor_seed,
     )
 
     # Apply class-level resampling for single-dataset path (boost / balance_classes).

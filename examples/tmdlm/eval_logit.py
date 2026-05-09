@@ -167,8 +167,8 @@ class EvalLogitArgs:
     answer_label_style: str = field(
         default="digit0",
         metadata={
-            "help": "MC answer label style: digit0 | number1 | letter",
-            "choices": ["digit0", "number1", "letter"],
+            "help": "MC answer label style: digit0 | digit0_pad | number1 | letter",
+            "choices": ["digit0", "digit0_pad", "number1", "letter"],
         },
     )
     include_neighbor_labels: bool = field(
@@ -196,6 +196,34 @@ class EvalLogitArgs:
         default=0,
         metadata={"help": "Limit eval to first N samples (0 = all)"},
     )
+    apply_class_prior_calibration: bool = field(
+        default=False,
+        metadata={"help": "If True, also report calibrated accuracy = argmax(logit - log p_train(c))"},
+    )
+    train_resample_strategy: str = field(
+        default="none",
+        metadata={"help": "Used only with apply_class_prior_calibration. Should match SFT-time value (none/boost/balance_classes)"},
+    )
+    train_boost_spec: str = field(
+        default="",
+        metadata={"help": "Used only with apply_class_prior_calibration. Should match SFT-time value"},
+    )
+    train_max_train_samples: int = field(
+        default=0,
+        metadata={"help": "Used only with apply_class_prior_calibration. Should match SFT-time max_train_samples (0 = full train)"},
+    )
+    dump_logits_path: str | None = field(
+        default=None,
+        metadata={"help": "If set, save per-sample scores / per-position log-probs / cls_labels / log_prior to this .npz path for offline post-processing."},
+    )
+    dump_per_position: bool = field(
+        default=False,
+        metadata={"help": "When dump_logits_path is set, also save per-answer-position class log-probs (shape [N, max_ans_len, K]). Multi-token only."},
+    )
+    neighbor_seed: int = field(
+        default=-1,
+        metadata={"help": "If >=0, governs neighbor sampling RNG independently of `seed` (which controls the 1000-sample selection). Use to do TTA over fixed sample IDs with jittered neighbors."},
+    )
 
 
 @torch.no_grad()
@@ -211,16 +239,18 @@ def evaluate_layer0(
     max_answer_tokens=1,
     dataset_name="cora",
     prompt_format="mc_digit",
+    log_prior=None,
+    dump_scores=False,
+    dump_per_position=False,
 ):
     """
     Layer 0 evaluation: frozen model, mask answer tokens, single forward pass,
     classify by restricted argmax (single-token) or log-prob sum (multi-token).
 
-    Returns:
-        accuracy: float
-        per_class_correct: dict[int, int]
-        per_class_total: dict[int, int]
-        predictions: list[int]
+    If log_prior is provided ([K] tensor), also computes calibrated predictions
+    via argmax(scores - log_prior) and tracks them in parallel.
+
+    Returns dict with raw and calibrated metrics.
     """
     device = next(model.parameters()).device
 
@@ -247,10 +277,16 @@ def evaluate_layer0(
     )
 
     correct = 0
+    correct_cal = 0
     total = 0
     per_class_correct = {i: 0 for i in range(num_classes)}
+    per_class_correct_cal = {i: 0 for i in range(num_classes)}
     per_class_total = {i: 0 for i in range(num_classes)}
     all_predictions = []
+    all_predictions_cal = []
+    all_scores = [] if dump_scores else None  # list of [b, K] tensors
+    all_per_pos = [] if (dump_scores and dump_per_position) else None  # list of [b, max_ans_len, K]
+    all_cls_labels = [] if dump_scores else None
 
     pbar = tqdm(dataloader, desc="Evaluating")
     for batch in pbar:
@@ -297,6 +333,9 @@ def evaluate_layer0(
         outputs = model(**forward_kwargs)
         logits = outputs.logits  # [b, l, V]
 
+        scores_for_dump = None
+        per_pos_for_dump = None
+
         if max_answer_tokens == 1:
             # Single-token: restricted argmax over class token IDs
             label_logits = logits[
@@ -307,6 +346,11 @@ def evaluate_layer0(
             )  # [b, V]
             restricted_logits = label_logits[:, class_token_ids_tensor]  # [b, K]
             preds = restricted_logits.argmax(dim=-1)  # [b]
+            if log_prior is not None:
+                preds_cal = (restricted_logits - log_prior).argmax(dim=-1)
+            else:
+                preds_cal = preds
+            scores_for_dump = restricted_logits
         else:
             # Multi-token: sum log-probs across answer positions per class
             # label_indices: [b, max_ans_len]
@@ -326,6 +370,7 @@ def evaluate_layer0(
                     class_token_ids_tensor=class_token_ids_tensor,
                     tokenizer=tokenizer,
                 )
+                preds_cal = preds  # calibration not implemented for hierarchical pubmed
             else:
                 # For each class k, gather log-probs for its tokens: [b, K]
                 # class_token_ids_tensor: [K, max_ans_len] -> expand to [b, K, max_ans_len]
@@ -353,23 +398,60 @@ def evaluate_layer0(
                 scores = scores / cls_lengths.unsqueeze(0)  # [b, K]
 
                 preds = scores.argmax(dim=-1)  # [b]
+                if log_prior is not None:
+                    preds_cal = (scores - log_prior).argmax(dim=-1)
+                else:
+                    preds_cal = preds
+                scores_for_dump = scores
+                if all_per_pos is not None:
+                    pp = torch.zeros(b, ans_len, K, device=device)
+                    for j in range(ans_len):
+                        pp[:, j, :] = ans_log_probs[:, j, :].gather(1, cls_ids[:, :, j])
+                    per_pos_for_dump = pp
+
+        if all_scores is not None and scores_for_dump is not None:
+            all_scores.append(scores_for_dump.detach().cpu())
+            all_cls_labels.append(cls_labels.detach().cpu())
+        if all_per_pos is not None and per_pos_for_dump is not None:
+            all_per_pos.append(per_pos_for_dump.detach().cpu())
 
         all_predictions.extend(preds.cpu().tolist())
+        all_predictions_cal.extend(preds_cal.cpu().tolist())
 
         for i in range(b):
             gt = cls_labels[i].item()
             pred = preds[i].item()
+            pred_cal = preds_cal[i].item()
             per_class_total[gt] += 1
             if pred == gt:
                 correct += 1
                 per_class_correct[gt] += 1
+            if pred_cal == gt:
+                correct_cal += 1
+                per_class_correct_cal[gt] += 1
             total += 1
 
         running_acc = 100.0 * correct / total if total > 0 else 0.0
-        pbar.set_postfix(acc=f"{running_acc:.2f}%", n=total)
+        running_acc_cal = 100.0 * correct_cal / total if total > 0 else 0.0
+        pbar.set_postfix(acc=f"{running_acc:.2f}%", acc_cal=f"{running_acc_cal:.2f}%", n=total)
 
     accuracy = 100.0 * correct / total if total > 0 else 0.0
-    return accuracy, per_class_correct, per_class_total, all_predictions
+    accuracy_cal = 100.0 * correct_cal / total if total > 0 else 0.0
+    out = {
+        "accuracy": accuracy,
+        "accuracy_calibrated": accuracy_cal,
+        "per_class_correct": per_class_correct,
+        "per_class_correct_calibrated": per_class_correct_cal,
+        "per_class_total": per_class_total,
+        "predictions": all_predictions,
+        "predictions_calibrated": all_predictions_cal,
+    }
+    if all_scores is not None and len(all_scores) > 0:
+        out["scores"] = torch.cat(all_scores, dim=0).numpy()  # [N, K]
+        out["cls_labels"] = torch.cat(all_cls_labels, dim=0).numpy()  # [N]
+        if all_per_pos is not None and len(all_per_pos) > 0:
+            out["per_pos_logprobs"] = torch.cat(all_per_pos, dim=0).numpy()  # [N, max_ans_len, K]
+    return out
 
 
 def main():
@@ -454,6 +536,7 @@ def main():
         include_neighbor_labels=args.include_neighbor_labels,
         neighbor_label_format=args.neighbor_label_format,
         max_samples=args.max_samples,
+        neighbor_seed=args.neighbor_seed if args.neighbor_seed >= 0 else None,
     )
     logger.info("Loaded %d samples", len(test_dataset))
 
@@ -470,9 +553,59 @@ def main():
         tokenizer.decode(sample["input_ids"][:200]),
     )
 
+    # Optionally compute logit-adjustment shift for post-hoc calibration.
+    # Calibrated score = logit - (log p_train - log p_test) = logit - log_prior_shift
+    # where p_train is the SFT-time class distribution (boosted) and p_test is
+    # the eval-time class distribution (estimated from the test set itself).
+    # This corrects for both (a) SFT-time boost bias and (b) train/test class
+    # distribution shift.
+    log_prior = None
+    if args.apply_class_prior_calibration:
+        logger.info("Loading train split for class prior calibration (resample=%s, boost=%s, max_train_samples=%d)...",
+                    args.train_resample_strategy, args.train_boost_spec, args.train_max_train_samples)
+        train_dataset_for_prior = load_tag_dataset(
+            args.dataset_name,
+            tokenizer=tokenizer,
+            split="train",
+            max_seq_len=args.max_seq_len,
+            max_neighbors_per_hop=args.max_neighbors_per_hop,
+            max_hops=args.max_hops,
+            seed=args.seed,
+            max_answer_tokens=args.max_answer_tokens,
+            prompt_layout=args.prompt_layout,
+            use_chat_template=args.use_chat_template,
+            prompt_format=args.prompt_format,
+            answer_label_style=args.answer_label_style,
+            include_neighbor_labels=args.include_neighbor_labels,
+            neighbor_label_format=args.neighbor_label_format,
+            max_samples=args.train_max_train_samples,
+            resample_strategy=args.train_resample_strategy,
+            boost_spec=args.train_boost_spec,
+        )
+        K = len(class_first_token_ids)
+        train_counts = torch.zeros(K, dtype=torch.float64)
+        for s in train_dataset_for_prior:
+            train_counts[int(s["cls_label"])] += 1.0
+        test_counts = torch.zeros(K, dtype=torch.float64)
+        for s in test_dataset:
+            test_counts[int(s["cls_label"])] += 1.0
+        eps = 1.0  # Laplace smoothing
+        train_probs = (train_counts + eps) / (train_counts.sum() + eps * K)
+        test_probs = (test_counts + eps) / (test_counts.sum() + eps * K)
+        log_train_prior = torch.log(train_probs)
+        log_test_prior = torch.log(test_probs)
+        # Subtracting this from logits applies the boost-correction + test-prior re-injection.
+        log_prior = (log_train_prior - log_test_prior).to(device=device, dtype=torch.float32)
+        logger.info("Train top-5 classes: %s",
+                    [(int(i), class_names[int(i)], int(c)) for i, c in sorted(enumerate(train_counts.tolist()), key=lambda x: -x[1])[:5]])
+        logger.info("Test  top-5 classes: %s",
+                    [(int(i), class_names[int(i)], int(c)) for i, c in sorted(enumerate(test_counts.tolist()), key=lambda x: -x[1])[:5]])
+        logger.info("Calibration shift (log p_train - log p_test) min=%.3f max=%.3f range=%.3f",
+                    log_prior.min().item(), log_prior.max().item(), (log_prior.max()-log_prior.min()).item())
+
     # Run evaluation
     t_start = time.time()
-    accuracy, per_class_correct, per_class_total, predictions = evaluate_layer0(
+    eval_out = evaluate_layer0(
         model=model,
         tokenizer=tokenizer,
         class_names=class_names,
@@ -484,7 +617,16 @@ def main():
         max_answer_tokens=args.max_answer_tokens,
         dataset_name=args.dataset_name,
         prompt_format=args.prompt_format,
+        log_prior=log_prior,
+        dump_scores=args.dump_logits_path is not None,
+        dump_per_position=args.dump_per_position,
     )
+    accuracy = eval_out["accuracy"]
+    accuracy_cal = eval_out["accuracy_calibrated"]
+    per_class_correct = eval_out["per_class_correct"]
+    per_class_correct_cal = eval_out["per_class_correct_calibrated"]
+    per_class_total = eval_out["per_class_total"]
+    predictions = eval_out["predictions"]
     elapsed = time.time() - t_start
 
     # Log results
@@ -496,18 +638,31 @@ def main():
         sum(per_class_correct.values()),
         sum(per_class_total.values()),
     )
+    if log_prior is not None:
+        logger.info(
+            "Calibrated accuracy: %.2f%% (%d/%d)",
+            accuracy_cal,
+            sum(per_class_correct_cal.values()),
+            sum(per_class_total.values()),
+        )
     logger.info("Time: %.1f seconds", elapsed)
 
     for i, name in enumerate(class_names):
         c, t = per_class_correct[i], per_class_total[i]
-        logger.info(
-            "  Class %d (%s): %.1f%% (%d/%d)",
-            i,
-            name,
-            100.0 * c / t if t > 0 else 0,
-            c,
-            t,
-        )
+        c_cal = per_class_correct_cal[i]
+        if log_prior is not None:
+            logger.info(
+                "  Class %d (%s): raw %.1f%% (%d/%d) | cal %.1f%% (%d/%d)",
+                i, name,
+                100.0 * c / t if t > 0 else 0, c, t,
+                100.0 * c_cal / t if t > 0 else 0, c_cal, t,
+            )
+        else:
+            logger.info(
+                "  Class %d (%s): %.1f%% (%d/%d)",
+                i, name,
+                100.0 * c / t if t > 0 else 0, c, t,
+            )
 
     # Save to log file
     os.makedirs(os.path.dirname(args.log_file), exist_ok=True)
@@ -518,6 +673,7 @@ def main():
         "dataset": args.dataset_name,
         "split": args.split,
         "accuracy": round(accuracy, 2),
+        "accuracy_calibrated": round(accuracy_cal, 2) if log_prior is not None else None,
         "per_class_accuracy": {
             class_names[i]: (
                 round(100.0 * per_class_correct[i] / per_class_total[i], 2)
@@ -526,6 +682,18 @@ def main():
             )
             for i in range(len(class_names))
         },
+        "per_class_accuracy_calibrated": (
+            {
+                class_names[i]: (
+                    round(100.0 * per_class_correct_cal[i] / per_class_total[i], 2)
+                    if per_class_total[i] > 0
+                    else 0
+                )
+                for i in range(len(class_names))
+            }
+            if log_prior is not None
+            else None
+        ),
         "config": {
             "batch_size": args.batch_size,
             "max_seq_len": args.max_seq_len,
@@ -546,6 +714,26 @@ def main():
     with open(args.log_file, "a") as f:
         f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
     logger.info("Results logged to %s", args.log_file)
+
+    if args.dump_logits_path and "scores" in eval_out:
+        import numpy as np
+        os.makedirs(os.path.dirname(args.dump_logits_path), exist_ok=True)
+        npz_payload = {
+            "scores": eval_out["scores"],
+            "cls_labels": eval_out["cls_labels"],
+            "predictions_raw": np.asarray(eval_out["predictions"], dtype=np.int64),
+            "predictions_cal": np.asarray(eval_out["predictions_calibrated"], dtype=np.int64),
+            "class_names": np.asarray(class_names),
+            "lora_path": np.asarray(args.lora_path or ""),
+            "max_samples": np.asarray(args.max_samples),
+            "seed": np.asarray(args.seed),
+        }
+        if log_prior is not None:
+            npz_payload["log_prior"] = log_prior.detach().cpu().numpy()
+        if "per_pos_logprobs" in eval_out:
+            npz_payload["per_pos_logprobs"] = eval_out["per_pos_logprobs"]
+        np.savez(args.dump_logits_path, **npz_payload)
+        logger.info("Dumped logits to %s (scores shape=%s)", args.dump_logits_path, eval_out["scores"].shape)
 
 
 if __name__ == "__main__":
