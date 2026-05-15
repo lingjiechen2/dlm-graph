@@ -92,7 +92,12 @@ class DataArguments:
     prompt_format: str = field(
         default="mc_digit",
         metadata={
-            "help": "Prompt format: 'mc_digit' (digit answer) or 'category_infill' (class-name infill with eos padding)"
+            "help": (
+                "Prompt format: 'mc_digit' (digit answer) | 'category_infill' "
+                "(class-name infill with eos padding) | 'nd_describe' "
+                "(LLaGA-style node description, center text hidden) | "
+                "'nda_describe' (same plus abstract in answer)"
+            )
         },
     )
     answer_label_style: str = field(
