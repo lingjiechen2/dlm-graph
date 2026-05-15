@@ -186,6 +186,23 @@ MAX_HOPS = 2
 # ---------------------------------------------------------------------------
 
 
+def _wrap_user_chat_template(
+    content_toks: list[int], tokenizer
+) -> tuple[list[int], int]:
+    """Splice content tokens into a Llama-3-style user-role chat template.
+
+    Why splice instead of decode→apply_chat_template: decoding tokens to text
+    and re-tokenizing is not a bijection — whitespace and special-token
+    boundaries can drift, which would shift node_spans relative to input_ids.
+    """
+    empty = tokenizer.apply_chat_template(
+        [{"role": "user", "content": ""}], tokenize=True, add_generation_prompt=True,
+    )
+    eot_id = tokenizer.encode("<|eot_id|>", add_special_tokens=False)[0]
+    offset = empty.index(eot_id)
+    return list(empty[:offset]) + list(content_toks) + list(empty[offset:]), offset
+
+
 def _sample_khop_neighbors(
     adj: dict[int, list[int]],
     node_id: int,
@@ -532,37 +549,9 @@ def _build_node_sample_chat(
                 nb_label_content_spans.append((start + ls, start + le, orig_toks))
             nb_hops.append(hop)
 
-    # --- Now wrap content in chat template ---
-    # Decode content tokens back to text, then apply chat template
-    content_text = tokenizer.decode(content_toks, skip_special_tokens=False)
-    template_ids = tokenizer.apply_chat_template(
-        [{"role": "user", "content": content_text}],
-        tokenize=True,
-        add_generation_prompt=True,
-    )
-
-    # Find where content tokens start within the template
-    # Template structure: [BOS, start_header, "user", end_header, \n, \n, ...content..., eot, start_header, "assistant", end_header, \n, \n]
-    # We need to locate the content tokens within template_ids
-    # The user content starts after the first \n\n (positions 4,5 in the template)
-    # and ends before <|eot_id|>
-
-    # Find content offset by matching: after "user" header there are two \n tokens
-    # Template prefix: BOS + start_header + "user" + end_header + \n + \n
-    empty_prefix_ids = tokenizer.apply_chat_template(
-        [{"role": "user", "content": ""}],
-        tokenize=True,
-        add_generation_prompt=True,
-    )
-    # Find where content would be inserted (between prefix \n\n and eot_id)
-    # In empty template, the eot_id comes right after the \n\n of user header
-    eot_id = tokenizer.encode("<|eot_id|>", add_special_tokens=False)[0]
-    # Content offset = index of eot_id in empty template (content goes before it)
-    content_offset = empty_prefix_ids.index(eot_id)
-
-    # Append answer tokens after the template (assistant header end)
-    input_ids = list(template_ids) + answer_tokens
-    label_token_pos = len(template_ids)  # answer starts right after template
+    template_ids, content_offset = _wrap_user_chat_template(content_toks, tokenizer)
+    input_ids = template_ids + answer_tokens
+    label_token_pos = len(template_ids)
 
     # --- Compute node_spans in final input_ids coordinates ---
     # Shift content spans by content_offset
@@ -846,6 +835,94 @@ def _build_node_sample_category(
     }
 
 
+def _build_node_sample_nd(
+    target_title: str,
+    target_abstract: Optional[str],
+    target_label_text: str,
+    neighbor_texts: list[str],
+    neighbor_hops: list[int],
+    cls_label: int,
+    tokenizer,
+    max_seq_len: int,
+    include_abstract: bool = False,
+) -> dict:
+    """LLaGA-style node description sample (Option A1).
+
+    Center text is excluded from the prompt; the model produces an LLaGA-style
+    description from neighbors alone. Labels are -100 except on the assistant
+    span, so the TM-DLM trainer applies diffusion masking + loss only there.
+    """
+    def _tok(text: str) -> list[int]:
+        return tokenizer.encode(text, add_special_tokens=False)
+
+    # Assistant target (LLaGA template). `nda_describe` adds the abstract.
+    title = (target_title or "").strip()
+    if include_abstract:
+        ab = (target_abstract or "").strip()
+        parts = [f"This is a paper in {target_label_text} domain"]
+        if title: parts.append(f"its title is {title}")
+        if ab: parts.append(f"its abstract is {ab}")
+        assistant_text = ", ".join(parts) + "."
+    elif title:
+        assistant_text = f"This is a paper in {target_label_text} domain, it's about {title}."
+    else:
+        assistant_text = f"This is a paper in {target_label_text} domain."
+    answer_tokens = _tok(assistant_text)
+
+    empty_prefix_ids = tokenizer.apply_chat_template(
+        [{"role": "user", "content": ""}], tokenize=True, add_generation_prompt=True,
+    )
+    instruction_toks = _tok("\nPlease briefly describe the center paper.")
+    content_budget = max_seq_len - len(empty_prefix_ids) - len(answer_tokens)
+    nb_budget_total = max(content_budget - len(instruction_toks), 0)
+    per_nb_budget = (
+        max(nb_budget_total // max(len(neighbor_texts), 1), 20) if neighbor_texts else 0
+    )
+
+    content_toks: list[int] = []
+    nb_spans: list[list[int]] = []
+    nb_hops_kept: list[int] = []
+    for i, (text, hop) in enumerate(zip(neighbor_texts, neighbor_hops)):
+        nb_ids = _tok(f"\nNeighbor {i + 1}: {text}")[:per_nb_budget]
+        if len(content_toks) + len(nb_ids) > nb_budget_total:
+            break
+        start = len(content_toks)
+        content_toks.extend(nb_ids)
+        nb_spans.append([start, len(content_toks)])
+        nb_hops_kept.append(hop)
+    content_toks.extend(instruction_toks)
+
+    template_ids, content_offset = _wrap_user_chat_template(content_toks, tokenizer)
+    # Protect the answer span: if template overflows, trim template, never answer.
+    max_template_len = max(max_seq_len - len(answer_tokens), 0)
+    if len(template_ids) > max_template_len:
+        template_ids = template_ids[:max_template_len]
+    input_ids = (template_ids + answer_tokens)[:max_seq_len]
+    label_token_pos = len(template_ids)
+
+    labels = [-100] * len(input_ids)
+    for j in range(len(answer_tokens)):
+        pos = label_token_pos + j
+        if pos < len(input_ids):
+            labels[pos] = input_ids[pos]
+
+    node_spans = [[label_token_pos, len(input_ids)]]
+    node_hops_out = [0]
+    for (s, e), hop in zip(nb_spans, nb_hops_kept):
+        node_spans.append([s + content_offset, e + content_offset])
+        node_hops_out.append(hop)
+
+    return {
+        "input_ids": input_ids,
+        "labels": labels,
+        "node_spans": node_spans,
+        "node_hops": node_hops_out,
+        "cls_label": cls_label,
+        "label_token_pos": label_token_pos,
+        "answer_len": len(answer_tokens),
+    }
+
+
 def build_node_sample(
     target_node_text: str,
     neighbor_texts: list[str],
@@ -866,6 +943,9 @@ def build_node_sample(
     neighbor_label_format: str = "bracket",
     include_options: bool = True,
     mask_neighbor_labels: bool = False,
+    target_title: Optional[str] = None,
+    target_abstract: Optional[str] = None,
+    target_label_text: Optional[str] = None,
 ) -> dict:
     """
     Build a single TM-DLM training sample for one target node.
@@ -884,10 +964,31 @@ def build_node_sample(
         Options: 0) Case Based 1) Genetic Algorithms ...
         The category of this paper is: <class_name>
 
+    nd_describe / nda_describe:
+        LLaGA-style node description. Center node text is NOT in the prompt;
+        only neighbor texts and an instruction are. The model must produce
+        a templated description. ``nda_describe`` includes the abstract in
+        the answer; ``nd_describe`` uses only the title.
+        Requires ``target_title`` and ``target_label_text``; ``target_abstract``
+        is required for ``nda_describe``.
+
     ``prompt_layout`` controls ordering (target_first vs neighbor_first).
 
     Labels are -100 everywhere EXCEPT at the answer token positions.
     """
+
+    if prompt_format in ("nd_describe", "nda_describe"):
+        return _build_node_sample_nd(
+            target_title=target_title,
+            target_abstract=target_abstract,
+            target_label_text=target_label_text,
+            neighbor_texts=neighbor_texts,
+            neighbor_hops=neighbor_hops,
+            cls_label=cls_label,
+            tokenizer=tokenizer,
+            max_seq_len=max_seq_len,
+            include_abstract=(prompt_format == "nda_describe"),
+        )
 
     if prompt_format == "category_infill":
         return _build_node_sample_category(
@@ -1175,6 +1276,9 @@ def _build_tag_samples(
             neighbor_label_format=neighbor_label_format,
             include_options=include_options,
             mask_neighbor_labels=mask_neighbor_labels,
+            target_title=info.get("title"),
+            target_abstract=info.get("abstract"),
+            target_label_text=class_names[info["label"]],
         )
         samples.append(result)
 
