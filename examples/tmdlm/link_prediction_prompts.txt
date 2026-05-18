@@ -34,7 +34,7 @@ Leak prevention:
 LP cora (train) pos=4488 neg=4488
 
 ------------------------------------------------------------------------------
-  cora — sample 2 (label = yes, input_ids = 2407 tokens)
+  cora — sample 2 (label = yes, input_ids = 2508 tokens)
 ------------------------------------------------------------------------------
 
   [TARGET hop=0 tok=0:312]
@@ -63,18 +63,20 @@ LP cora (train) pos=4488 neg=4488
     Paper B: Learning from incomplete data. Real-world learning tasks often involve high-dimensional data sets with complex patterns of missing features. In this paper we review the problem of learning from incomplete data f...
   [NBR_V hop=1 tok=1595:1751]
     Neighbor B1: Learning networks for face analysis and synthesis. This paper presents an overview of the face-related projects in our group. The unifying theme underlying our work is the use of example-based learning metho...
-  [NBR_V hop=2 tok=1751:1860]
-    Neighbor B2: In Advances in Neural Information Processing Systems 8  Gaussian Processes for Regression. The Bayesian analysis of neural networks is difficult because a simple prior over weights implies a complex prior di...
-  [NBR_V hop=2 tok=1860:2063]
-    Neighbor B3: Comparing Support Vector Machines with Gaussian Kernels to Radial Basis Function Classifiers. The Support Vector (SV) machine is a novel type of learning machine, based on statistical learning theory, which ...
-  [NBR_V hop=2 tok=2063:2266]
-    Neighbor B4: A Modular Q-Learning Architecture for Manipulator Task Decomposition `Data storage in the cerebellar model ar. Compositional Q-Learning (CQ-L) (Singh 1992) is a modular approach to learning to perform compos...
-  [NBR_V hop=2 tok=2266:2393]
-    Neighbor B5: GROWING RADIAL BASIS FUNCTION NETWORKS. This paper presents and evaluates two algorithms for incrementally constructing Radial Basis Function Networks, a class of neural networks which looks more suitable fo...
-  [QUESTION hop=0 tok=2393:2407]
+  [NBR_V hop=2 tok=1751:1920]
+    Neighbor B2: Function Approximation with Neural Networks and Local Methods: Bias, Variance and Smoothness. We review the use of global and local methods for estimating a function mapping R m ) R n from samples of the fun...
+  [NBR_V hop=2 tok=1920:2029]
+    Neighbor B3: In Advances in Neural Information Processing Systems 8  Gaussian Processes for Regression. The Bayesian analysis of neural networks is difficult because a simple prior over weights implies a complex prior di...
+  [NBR_V hop=2 tok=2029:2198]
+    Neighbor B4: Comparing Support Vector Machines with Gaussian Kernels to Radial Basis Function Classifiers. The Support Vector (SV) machine is a novel type of learning machine, based on statistical learning theory, which ...
+  [NBR_V hop=2 tok=2198:2367]
+    Neighbor B5: A Modular Q-Learning Architecture for Manipulator Task Decomposition `Data storage in the cerebellar model ar. Compositional Q-Learning (CQ-L) (Singh 1992) is a modular approach to learning to perform compos...
+  [NBR_V hop=2 tok=2367:2494]
+    Neighbor B6: GROWING RADIAL BASIS FUNCTION NETWORKS. This paper presents and evaluates two algorithms for incrementally constructing Radial Basis Function Networks, a class of neural networks which looks more suitable fo...
+  [QUESTION hop=0 tok=2494:2508]
     Do Paper A and Paper B cite each other? Answer: yes
 
-  ANSWER (supervised, 1 token at pos 2406): ' yes'
+  ANSWER (supervised, 1 token at pos 2507): ' yes'
 
 ------------------------------------------------------------------------------
   cora — sample 0 (label = no, input_ids = 1511 tokens)

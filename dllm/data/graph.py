@@ -1866,16 +1866,16 @@ def _sample_lp_neighbors(
     max_hops: int,
     rng: random.Random,
 ) -> tuple[list[int], list[int], list[int], list[int]]:
-    """Sample dedup'd k-hop neighbours for u and v. Drops v from u's pool, u
-    from v's pool, and drops shared neighbours from v's set so each id appears
-    at most once across the merged sequence."""
+    """Sample k-hop neighbours for u and v. Drops v from u's pool and u from
+    v's pool (direct candidate-edge leak protection). Shared neighbours are
+    deliberately NOT deduplicated: positive pairs share more neighbours than
+    negative pairs, and removing them from one side would shrink that side's
+    visible neighbour count in a label-correlated way, letting the model cheat
+    by counting tokens instead of reading content."""
     u_ids, u_hops = _sample_khop_neighbors(adj, u, max_neighbors_per_hop, max_hops, rng)
     u_kept = [(nb, hop) for nb, hop in zip(u_ids, u_hops) if nb != v]
-    u_set = {nb for nb, _ in u_kept}
     v_ids, v_hops = _sample_khop_neighbors(adj, v, max_neighbors_per_hop, max_hops, rng)
-    v_kept = [
-        (nb, hop) for nb, hop in zip(v_ids, v_hops) if nb != u and nb not in u_set
-    ]
+    v_kept = [(nb, hop) for nb, hop in zip(v_ids, v_hops) if nb != u]
 
     u_ids2 = [nb for nb, _ in u_kept]
     u_hops2 = [hop for _, hop in u_kept]
