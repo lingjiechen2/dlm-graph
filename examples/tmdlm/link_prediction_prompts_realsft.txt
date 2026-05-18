@@ -1,0 +1,801 @@
+==============================================================================
+  Link-prediction SFT prompts (real-SFT parameters)
+==============================================================================
+
+Sampled from `load_lp_dataset` using the EXACT params the running
+arxiv LP sanity SFT consumes (run_sft_arxiv_lp_lora_sanity.sh):
+
+  max_seq_len = 4096
+  max_neighbors_per_hop = 10
+  max_hops = 2
+  seed = 42
+  neg_ratio = 1
+
+max_neighbors_per_hop=10 (vs 5 in link_prediction_prompts.txt), so
+each side now keeps up to ~10 first-hop + ~100 second-hop neighbours
+before the per-quarter token budget cap in build_edge_sample.
+
+Sequence layout per sample (no chat template):
+  Paper A: <u.title>. <u.abstract>
+  Neighbor A1..AK: <nb.title>. <nb.abstract>
+  Paper B: <v.title>. <v.abstract>
+  Neighbor B1..BK: <nb.title>. <nb.abstract>
+  Do Paper A and Paper B cite each other? Answer: <yes|no>
+
+
+==============================================================================
+  Dataset: cora
+==============================================================================
+
+LP cora (train) pos=4488 neg=4488
+
+------------------------------------------------------------------------------
+  sample 2 | label = yes | tokens = 2551 | NBR_U = 20 | NBR_V = 11
+------------------------------------------------------------------------------
+
+  [TARGET hop=0 tok=0:312]
+    Paper A: Hierarchical Mixtures of Experts and the EM Algorithm. We present a tree-structured architecture for supervised learning. The statistical model underlying the architecture is a hierarchical m...
+  [NBR_U hop=1 tok=312:362]
+    
+Neighbor A1: From Isolation to Cooperation: An Alternative View of a System of Experts. We introduce a constructive, incremental learning system for regression problems that models data by means of l...
+  [NBR_U hop=1 tok=362:412]
+    
+Neighbor A2: Combining Linear Discriminant Functions with Neural Networks for Supervised Learning. A novel supervised learning method is presented by combining linear discriminant functions with neur...
+  [NBR_U hop=1 tok=412:462]
+    
+Neighbor A3: On learning hierarchical classifications. Many significant real-world classification tasks involve a large number of categories which are arranged in a hierarchical structure; for exampl...
+  [NBR_U hop=1 tok=462:491]
+    
+Neighbor A4: Comparison of Neural and Statistical Classifiers| Theory and Practice. Research Reports A13 January 1996
+  [NBR_U hop=1 tok=491:541]
+    
+Neighbor A5: CLASSIFICATION USING HIERARCHICAL MIXTURES OF EXPERTS. There has recently been widespread interest in the use of multiple models for classification and regression in the statistics and n...
+  [NBR_U hop=1 tok=541:591]
+    
+Neighbor A6: Proben1 A Set of Neural Network Benchmark Problems and Benchmarking Rules. Proben1 is a collection of problems for neural network learning in the realm of pattern classification and func...
+  [NBR_U hop=1 tok=591:641]
+    
+Neighbor A7: Expectation-Based Selective Attention for Visual Monitoring and Control of a Robot Vehicle. Reliable vision-based control of an autonomous vehicle requires the ability to focus attention...
+  [NBR_U hop=1 tok=641:691]
+    
+Neighbor A8: Cortical Mechanisms of Visual Recognition and Learning: A Hierarchical Kalman Filter Model. We describe a biologically plausible model of dynamic recognition and learning in the visual c...
+  [NBR_U hop=1 tok=691:741]
+    
+Neighbor A9: Mixtures of Probabilistic Principal Component Analysers. Principal component analysis (PCA) is one of the most popular techniques for processing, compressing and visualising data, althou...
+  [NBR_U hop=1 tok=741:791]
+    
+Neighbor A10: Using Neural Networks for Descriptive Statistical Analysis of Educational Data. In this paper we discuss the methodological issues of using a class of neural networks called Mixture Den...
+  [NBR_U hop=2 tok=791:841]
+    
+Neighbor A11: Evaluation of Pattern Classifiers for Fingerprint and OCR Applications. In this paper we evaluate the classification accuracy of four statistical and three neural network classifiers fo...
+  [NBR_U hop=2 tok=841:891]
+    
+Neighbor A12: Constructive Algorithms for Hierarchical Mixtures of Experts. We present two additions to the hierarchical mixture of experts (HME) architecture. We view the HME as a tree structured cl...
+  [NBR_U hop=2 tok=891:941]
+    
+Neighbor A13: Recognizing Handwritten Digits Using Mixtures of Linear Models. We construct a mixture of locally linear generative models of a collection of pixel-based images of digits, and use them ...
+  [NBR_U hop=2 tok=941:991]
+    
+Neighbor A14: The Pandemonium System of Reflective Agents. In IEEE Transactions on Neural Networks, 7(1):97-106, 1996 Also available as GMD report #79
+  [NBR_U hop=2 tok=991:1020]
+    
+Neighbor A15: A BENCHMARK FOR CLASSIFIER LEARNING. Technical Report 474 November 1993
+  [NBR_U hop=2 tok=1020:1070]
+    
+Neighbor A16: An Evolutionary Method to Find Good Building-Blocks for Architectures of Artificial Neural Networks. This paper deals with the combination of Evolutionary Algorithms and Artificial Neur...
+  [NBR_U hop=2 tok=1070:1120]
+    
+Neighbor A17: Interpretable Neural Networks with BP-SOM. Interpretation of models induced by artificial neural networks is often a difficult task. In this paper we focus on a relatively novel neural ...
+  [NBR_U hop=2 tok=1120:1170]
+    
+Neighbor A18: Cholinergic suppression of transmission may allow combined associative memory function and self-organization in the neocortex.. Selective suppression of transmission at feedback synapse...
+  [NBR_U hop=2 tok=1170:1220]
+    
+Neighbor A19: Adaptive Parameter Pruning in Neural Networks. Neural network pruning methods on the level of individual network parameters (e.g. connection weights) can improve generalization. An open...
+  [NBR_U hop=2 tok=1220:1257]
+    
+Neighbor A20: Constructive Training Methods for Feedforward Neural Networks with Binary Weights. DIMACS Technical Report 95-35 August 1995
+  [TARGET hop=0 tok=1257:1595]
+    
+Paper B: Learning from incomplete data. Real-world learning tasks often involve high-dimensional data sets with complex patterns of missing features. In this paper we review the problem of learning f...
+  [NBR_V hop=1 tok=1595:1687]
+    
+Neighbor B1: Learning networks for face analysis and synthesis. This paper presents an overview of the face-related projects in our group. The unifying theme underlying our work is the use of example...
+  [NBR_V hop=2 tok=1687:1779]
+    
+Neighbor B2: for Projective Basis Function Networks 2m1 Global Form 2m Local Form With appropriate constant factors,. OGI CSE Technical Report 96-006 Abstract: Smoothing regularizers for radial basis...
+  [NBR_V hop=2 tok=1779:1871]
+    
+Neighbor B3: A Statistical Approach to Decision Tree Modeling. A statistical approach to decision tree modeling is described. In this approach, each decision in the tree is modeled parametrically as ...
+  [NBR_V hop=2 tok=1871:1963]
+    
+Neighbor B4: Receptive Fields for Vision: from Hyperacuity to Object Recognition. Many of the lower-level areas in the mammalian visual system are organized retinotopically, that is, as maps which pr...
+  [NBR_V hop=2 tok=1963:2055]
+    
+Neighbor B5: Power System Security Margin Prediction Using Radial Basis Function Networks. Dr. McCalley's research is partially supported through grants from National Science Foundation and Pacific G...
+  [NBR_V hop=2 tok=2055:2147]
+    
+Neighbor B6: FONN: Combining First Order Logic with Connectionist Learning. This paper presents a neural network architecture that can manage structured data and refine knowledge bases expressed in a...
+  [NBR_V hop=2 tok=2147:2239]
+    
+Neighbor B7: Using the Stochastic Gradient Method to Fit Polychotomous Regression Models. Technical Report No. 319 April 7, 1997 University of Washington Department of Statistics Seattle, Washington ...
+  [NBR_V hop=2 tok=2239:2261]
+    
+Neighbor B8: Generalization to local remappings of the visuomotor coordinate transformation. 
+  [NBR_V hop=2 tok=2261:2353]
+    
+Neighbor B9: Learning Controllers from Examples  a motivation for searching alternative, empirical techniques for generating controllers.. Today there is a great interest in discovering methods that ...
+  [NBR_V hop=2 tok=2353:2445]
+    
+Neighbor B10: On learning hierarchical classifications. Many significant real-world classification tasks involve a large number of categories which are arranged in a hierarchical structure; for examp...
+  [NBR_V hop=2 tok=2445:2537]
+    
+Neighbor B11: Equivalence of Linear Boltzmann Chains and Hidden Markov Models sequence L, is: where Z(; A;. Several authors have made a link between hidden Markov models for time series and energy-ba...
+  [QUESTION hop=0 tok=2537:2551]
+    
+Do Paper A and Paper B cite each other? Answer: yes
+
+  ANSWER (supervised, 1 token at pos 2550): ' yes'
+
+------------------------------------------------------------------------------
+  sample 3 | label = yes | tokens = 2215 | NBR_U = 13 | NBR_V = 14
+------------------------------------------------------------------------------
+
+  [TARGET hop=0 tok=0:33]
+    Paper A: Developments in Probabilistic Modelling with Neural Networks|Ensemble Learning. In this paper I give a review of ensemble learning using a simple example.
+  [NBR_U hop=1 tok=33:111]
+    
+Neighbor A1: A VIEW OF THE EM ALGORITHM THAT JUSTIFIES INCREMENTAL, SPARSE, AND OTHER VARIANTS. The EM algorithm performs maximum likelihood estimation for data in which some variables are unobserved...
+  [NBR_U hop=1 tok=111:189]
+    
+Neighbor A2: Ensemble Learning and Evidence Maximization. Ensemble learning by variational free energy minimization is a tool introduced to neural networks by Hinton and van Camp in which learning is...
+  [NBR_U hop=1 tok=189:267]
+    
+Neighbor A3: Ensemble Learning for Hidden Markov Models. The standard method for training Hidden Markov Models optimizes a point estimate of the model parameters. This estimate, which can be viewed a...
+  [NBR_U hop=2 tok=267:345]
+    
+Neighbor A4: Free Energy Minimization Algorithm for Decoding and Cryptanalysis three binary vectors: s of length N. where A is a binary matrix. Our task is to infer s given z and A, and given assumpt...
+  [NBR_U hop=2 tok=345:423]
+    
+Neighbor A5: A Practical Bayesian Framework for Backprop Networks. A quantitative and practical Bayesian framework is described for learning of mappings in feedforward networks. The framework makes p...
+  [NBR_U hop=2 tok=423:501]
+    
+Neighbor A6: FLAT MINIMA Neural Computation 9(1):1-42 (1997). We present a new algorithm for finding low complexity neural networks with high generalization capability. The algorithm searches for a "...
+  [NBR_U hop=2 tok=501:579]
+    
+Neighbor A7: Mean Field Theory for Sigmoid Belief Networks. We develop a mean field theory for sigmoid belief networks based on ideas from statistical mechanics. Our mean field theory provides a trac...
+  [NBR_U hop=2 tok=579:657]
+    
+Neighbor A8: On Convergence Properties of the EM Algorithm for Gaussian Mixtures. We build up the mathematical connection between the "Expectation-Maximization" (EM) algorithm and gradient-based appr...
+  [NBR_U hop=2 tok=657:735]
+    
+Neighbor A9: A Statistical Approach to Decision Tree Modeling. A statistical approach to decision tree modeling is described. In this approach, each decision in the tree is modeled parametrically as ...
+  [NBR_U hop=2 tok=735:813]
+    
+Neighbor A10: On Structured Variational Approximations. The problem of approximating a probability distribution occurs frequently in many areas of applied mathematics, including statistics, communica...
+  [NBR_U hop=2 tok=813:891]
+    
+Neighbor A11: A HIERARCHICAL COMMUNITY OF EXPERTS. We describe a directed acyclic graphical model that contains a hierarchy of linear units and a mechanism for dynamically selecting an appropriate su...
+  [NBR_U hop=2 tok=891:969]
+    
+Neighbor A12: Localist Attractor Networks. Attractor networks, which map a continuous input space to a discrete output space, are useful for pattern completion, cleaning up noisy or missing features ...
+  [NBR_U hop=2 tok=969:991]
+    
+Neighbor A13: DRAFT Cluster-Weighted Modeling for Time Series Prediction and Characterization. 
+  [TARGET hop=0 tok=991:1193]
+    
+Paper B: Keeping Neural Networks Simple by Minimizing the Description Length of the Weights. Supervised neural networks generalize well if there is much less information in the weights than there is ...
+  [NBR_V hop=1 tok=1193:1265]
+    
+Neighbor B1: Ensemble Learning for Hidden Markov Models. The standard method for training Hidden Markov Models optimizes a point estimate of the model parameters. This estimate, which can be viewed a...
+  [NBR_V hop=1 tok=1265:1337]
+    
+Neighbor B2: FLAT MINIMA Neural Computation 9(1):1-42 (1997). We present a new algorithm for finding low complexity neural networks with high generalization capability. The algorithm searches for a "...
+  [NBR_V hop=1 tok=1337:1409]
+    
+Neighbor B3: Ensemble Learning and Evidence Maximization. Ensemble learning by variational free energy minimization is a tool introduced to neural networks by Hinton and van Camp in which learning is...
+  [NBR_V hop=1 tok=1409:1481]
+    
+Neighbor B4: A Practical Bayesian Framework for Backprop Networks. A quantitative and practical Bayesian framework is described for learning of mappings in feedforward networks. The framework makes p...
+  [NBR_V hop=2 tok=1481:1553]
+    
+Neighbor B5: PREDICTING SUNSPOTS AND EXCHANGE RATES WITH CONNECTIONIST NETWORKS. We investigate the effectiveness of connectionist networks for predicting the future continuation of temporal sequence...
+  [NBR_V hop=2 tok=1553:1625]
+    
+Neighbor B6: In Advances in Neural Information Processing Systems 8  Gaussian Processes for Regression. The Bayesian analysis of neural networks is difficult because a simple prior over weights impli...
+  [NBR_V hop=2 tok=1625:1697]
+    
+Neighbor B7: MDL and MML Similarities and Differences (Introduction to Minimum Encoding Inference Part III). Tech Report 207 Department of Computer Science, Monash University, Clayton, Vic. 3168, Aus...
+  [NBR_V hop=2 tok=1697:1769]
+    
+Neighbor B8: Efficient Implementation of Gaussian Processes. Neural networks and Bayesian inference provide a useful framework within which to solve regression problems. However their parameterizatio...
+  [NBR_V hop=2 tok=1769:1841]
+    
+Neighbor B9: . Draft A Brief Introduction to Neural Networks Richard D. De Veaux Lyle H. Ungar Williams College University of Pennsylvania Abstract Artificial neural networks are being used with incr...
+  [NBR_V hop=2 tok=1841:1913]
+    
+Neighbor B10: ADAPTIVE REGULARIZATION. Regularization, e.g., in the form of weight decay, is important for training and optimization of neural network architectures. In this work we provide a tool ba...
+  [NBR_V hop=2 tok=1913:1985]
+    
+Neighbor B11: A VIEW OF THE EM ALGORITHM THAT JUSTIFIES INCREMENTAL, SPARSE, AND OTHER VARIANTS. The EM algorithm performs maximum likelihood estimation for data in which some variables are unobserve...
+  [NBR_V hop=2 tok=1985:2057]
+    
+Neighbor B12: DISCOVERING NEURAL NETS WITH LOW KOLMOGOROV COMPLEXITY AND HIGH GENERALIZATION CAPABILITY Neural Networks 10(5):857-873, 1997. Many neural net learning algorithms aim at finding "simple...
+  [NBR_V hop=2 tok=2057:2129]
+    
+Neighbor B13: Probabilistic Networks: New Models and New Methods. In this paper I describe the implementation of a probabilistic regression model in BUGS. BUGS is a program that carries out Bayesian ...
+  [NBR_V hop=2 tok=2129:2201]
+    
+Neighbor B14: Best-First Model Merging for Dynamic Learning and Recognition. Best-first model merging is a general technique for dynamically choosing the structure of a neural or related architecture...
+  [QUESTION hop=0 tok=2201:2215]
+    
+Do Paper A and Paper B cite each other? Answer: yes
+
+  ANSWER (supervised, 1 token at pos 2214): ' yes'
+
+------------------------------------------------------------------------------
+  sample 0 | label = no | tokens = 1649 | NBR_U = 6 | NBR_V = 12
+------------------------------------------------------------------------------
+
+  [TARGET hop=0 tok=0:24]
+    Paper A: Generalized Queries on Probabilistic Context-Free Grammars  on Pattern Analysis and Machine Intelligence. 
+  [NBR_U hop=1 tok=24:193]
+    
+Neighbor A1: Accounting for Context in Plan Recognition, with Application to Traffic Monitoring. Typical approaches to plan recognition start from a representation of an agent's possible plans, and r...
+  [NBR_U hop=1 tok=193:275]
+    
+Neighbor A2: Topological Parameters for time-space tradeoff. In this paper we propose a family of algorithms combining tree-clustering with conditioning that trade space for time. Such algorithms are...
+  [NBR_U hop=2 tok=275:395]
+    
+Neighbor A3: The BATmobile: Towards a Bayesian Automated Taxi. The problem of driving an autonomous vehicle in highway traffic engages many areas of AI research and has substantial economic significa...
+  [NBR_U hop=2 tok=395:532]
+    
+Neighbor A4: The Automated Mapping of Plans for Plan Recognition. To coordinate with other agents in its environment, an agent needs models of what the other agents are trying to do. When communicati...
+  [NBR_U hop=2 tok=532:582]
+    
+Neighbor A5: Sonderforschungsbereich 314 K unstliche Intelligenz Wissensbasierte Systeme KI-Labor am Lehrstuhl f ur Informatik IV Numerical. 
+  [NBR_U hop=2 tok=582:708]
+    
+Neighbor A6: BUCKET ELIMINATION: A UNIFYING FRAMEWORK FOR PROBABILISTIC INFERENCE. Probabilistic inference algorithms for belief updating, finding the most probable explanation, the maximum a posteri...
+  [TARGET hop=0 tok=708:784]
+    
+Paper B: Genetic Programming for Pedestrians. We propose an extension to the Genetic Programming paradigm which allows users of traditional Genetic Algorithms to evolve computer programs. To this end...
+  [NBR_V hop=1 tok=784:868]
+    
+Neighbor B1: Genetic Programming Estimates of Kolmogorov Complexity. In this paper the problem of the Kolmogorov complexity related to binary strings is faced. We propose a Genetic Programming approa...
+  [NBR_V hop=1 tok=868:952]
+    
+Neighbor B2: 4 Implementing Application Specific Routines  Genetic algorithms in search, optimization, and machine learning. Reading, MA: Addison-Wesley.. To implement a specific application, you sho...
+  [NBR_V hop=2 tok=952:970]
+    
+Neighbor B3: University of Nevada Reno Design Strategies for Evolutionary Robotics. 
+  [NBR_V hop=2 tok=970:1054]
+    
+Neighbor B4: Data Analyses Using Simulated Breeding and Inductive Learning Methods. Marketing decision making tasks require the acquisition of efficient decision rules from noisy questionnaire data. ...
+  [NBR_V hop=2 tok=1054:1138]
+    
+Neighbor B5: HGA: A Hardware-Based Genetic Algorithm. A genetic algorithm (GA) is a robust problem-solving method based on natural selection. Hardware's speed advantage and its ability to parallelize...
+  [NBR_V hop=2 tok=1138:1151]
+    
+Neighbor B6: A Survey of Evolution Strategies. 
+  [NBR_V hop=2 tok=1151:1235]
+    
+Neighbor B7: An Evolutionary Approach to Vector Quantizer Design. Vector quantization is a lossy coding technique for encoding a set of vectors from different sources such as image and speech. The de...
+  [NBR_V hop=2 tok=1235:1299]
+    
+Neighbor B8: Genetic Algorithms For Vertex Splitting in DAGs 1. 1 This paper has been submitted to the 5th International Conference on Genetic Algorithms 2 electronic mail address: matze@cs.umr.edu 3...
+  [NBR_V hop=2 tok=1299:1383]
+    
+Neighbor B9: Evaluating Evolutionary Algorithms. Test functions are commonly used to evaluate the effectiveness of different search algorithms. However, the results of evaluation are as dependent on ...
+  [NBR_V hop=2 tok=1383:1467]
+    
+Neighbor B10: LIBGA: A USER-FRIENDLY WORKBENCH FOR ORDER-BASED GENETIC ALGORITHM RESEARCH. Over the years there has been several packages developed that provide a workbench for genetic algorithm (GA)...
+  [NBR_V hop=2 tok=1467:1551]
+    
+Neighbor B11: USING MARKER-BASED GENETIC ENCODING OF NEURAL NETWORKS TO EVOLVE FINITE-STATE BEHAVIOUR. A new mechanism for genetic encoding of neural networks is proposed, which is loosely based on t...
+  [NBR_V hop=2 tok=1551:1635]
+    
+Neighbor B12: Fitness Landscapes and Difficulty in Genetic Programming. The structure of the fitness landscape on which genetic programming operates is examined. The landscapes of a range of problems...
+  [QUESTION hop=0 tok=1635:1649]
+    
+Do Paper A and Paper B cite each other? Answer: no
+
+  ANSWER (supervised, 1 token at pos 1648): ' no'
+
+------------------------------------------------------------------------------
+  sample 1 | label = no | tokens = 1673 | NBR_U = 16 | NBR_V = 1
+------------------------------------------------------------------------------
+
+  [TARGET hop=0 tok=0:210]
+    Paper A: Multi-Agent Reinforcement Learning: Independent vs. Cooperative Agents. Intelligent human agents exist in a cooperative social environment that facilitates learning. They learn not only by tr...
+  [NBR_U hop=1 tok=210:273]
+    
+Neighbor A1: Adaptive Load Balancing: A Study in Multi-Agent Learning. We study the process of multi-agent reinforcement learning in the context of load balancing in a distributed system, without use...
+  [NBR_U hop=1 tok=273:336]
+    
+Neighbor A2: Team-Partitioned, Opaque-Transition Reinforcement Learning. In this paper, we present a novel multi-agent learning paradigm called team-partitioned, opaque-transition reinforcement learn...
+  [NBR_U hop=1 tok=336:399]
+    
+Neighbor A3: Reinforcement Learning in the Multi-Robot Domain. This paper describes a formulation of reinforcement learning that enables learning in noisy, dynamic environemnts such as in the complex...
+  [NBR_U hop=1 tok=399:462]
+    
+Neighbor A4: Multiagent Reinforcement Learning: Theoretical Framework and an Algorithm. In this paper, we adopt general-sum stochastic games as a framework for multiagent reinforcement learning. Our ...
+  [NBR_U hop=1 tok=462:525]
+    
+Neighbor A5: Using Communication to Reduce Locality in Distributed Multi-Agent Learning. This paper attempts to bridge the fields of machine learning, robotics, and distributed AI. It discusses the u...
+  [NBR_U hop=1 tok=525:588]
+    
+Neighbor A6: Markov games as a framework for multi-agent reinforcement learning. In the Markov decision process (MDP) formalization of reinforcement learning, a single adaptive agent interacts with a...
+  [NBR_U hop=2 tok=588:651]
+    
+Neighbor A7: Learning Roles: Behavioral Diversity in Robot Teams. This paper describes research investigating behavioral specialization in learning robot teams. Each agent is provided a common set of...
+  [NBR_U hop=2 tok=651:714]
+    
+Neighbor A8: Reinforcement Learning: A Survey. This paper surveys the field of reinforcement learning from a computer-science perspective. It is written to be accessible to researchers familiar with ...
+  [NBR_U hop=2 tok=714:777]
+    
+Neighbor A9: Generalized Markov Decision Processes: Dynamic-programming and Reinforcement-learning Algorithms. The problem of maximizing the expected total discounted reward in a completely observabl...
+  [NBR_U hop=2 tok=777:840]
+    
+Neighbor A10: A Unified Analysis of Value-Function-Based Reinforcement-Learning Algorithms. Reinforcement learning is the problem of generating optimal behavior in a sequential decision-making enviro...
+  [NBR_U hop=2 tok=840:903]
+    
+Neighbor A11: Machine Learning Learning to Predict by the Methods of Temporal Differences Keywords: Incremental learning, prediction,. This article introduces a class of incremental learning procedur...
+  [NBR_U hop=2 tok=903:966]
+    
+Neighbor A12: A Competitive Approach to Game Learning. Machine learning of game strategies has often depended on competitive methods that continually develop new strategies capable of defeating previ...
+  [NBR_U hop=2 tok=966:1029]
+    
+Neighbor A13: Control Systems Magazine, 14, 1, pp.57-71. Robot Juggling: An Implementation of Memory-based Learning. This paper explores issues involved in implementing robot learning for a challengi...
+  [NBR_U hop=2 tok=1029:1092]
+    
+Neighbor A14: Co-Evolving Soccer Softbot Team Coordination with Genetic Programming. Genetic Programming is a promising new method for automatically generating functions and algorithms through natura...
+  [NBR_U hop=2 tok=1092:1155]
+    
+Neighbor A15: Figure 3: Average model size accepted from a ran-dom prefix-closed samples of various size, and. that is based on Angluin's L fl algorithm. The algorithm maintains a model consistent wi...
+  [NBR_U hop=2 tok=1155:1218]
+    
+Neighbor A16: Learning to Act using Real-Time Dynamic Programming. fl The authors thank Rich Yee, Vijay Gullapalli, Brian Pinette, and Jonathan Bachrach for helping to clarify the relationships betwe...
+  [TARGET hop=0 tok=1218:1474]
+    
+Paper B: Utility Elicitation as a Classification Problem. We investigate the application of classification techniques to utility elicitation. In a decision problem, two sets of parameters must genera...
+  [NBR_V hop=1 tok=1474:1659]
+    
+Neighbor B1: A Constraint-Based Approach to Preference Elicitation and Decision Making. We investigate the solution of constraint-based configuration problems in which the preference function over ou...
+  [QUESTION hop=0 tok=1659:1673]
+    
+Do Paper A and Paper B cite each other? Answer: no
+
+  ANSWER (supervised, 1 token at pos 1672): ' no'
+
+==============================================================================
+  Dataset: ogbn-arxiv
+==============================================================================
+
+LP ogbn-arxiv (train) pos=984131 neg=984131
+
+------------------------------------------------------------------------------
+  sample 2 | label = yes | tokens = 2614 | NBR_U = 20 | NBR_V = 20
+------------------------------------------------------------------------------
+
+  [TARGET hop=0 tok=0:338]
+    Paper A: aspect aware latent factor model rating prediction with ratings and reviews. Although latent factor model (e.g., matrix factorization) achieves good accuracy in rating prediction, it suffers ...
+  [NBR_U hop=1 tok=338:388]
+    
+Neighbor A1: parallel split join networks for shared account cross domain sequential recommendations. Sequential Recommendation (SR) has been attracting a growing attention for the superiority in mod...
+  [NBR_U hop=1 tok=388:438]
+    
+Neighbor A2: a capsule network for recommendation and explaining what you like and dislike. User reviews contain rich semantics towards the preference of users to features of items. Recently, many de...
+  [NBR_U hop=1 tok=438:488]
+    
+Neighbor A3: attentive aspect modeling for review aware recommendation. In recent years, many studies extract aspects from user reviews and integrate them with ratings for improving the recommendatio...
+  [NBR_U hop=1 tok=488:538]
+    
+Neighbor A4: transnets learning to transform for recommendation. Recently, deep learning methods have been shown to improve the performance of recommender systems over traditional methods, especially...
+  [NBR_U hop=1 tok=538:588]
+    
+Neighbor A5: mmalfm explainable recommendation by leveraging reviews and images. Personalized rating prediction is an important research problem in recommender systems. Although the latent factor mod...
+  [NBR_U hop=1 tok=588:638]
+    
+Neighbor A6: compositional coding for collaborative filtering. Efficiency is crucial to the online recommender systems. Representing users and items as binary vectors for Collaborative Filtering (CF)...
+  [NBR_U hop=1 tok=638:688]
+    
+Neighbor A7: a review driven neural model for sequential recommendation. Writing review for a purchased item is a unique channel to express a user's opinion in E-Commerce. Recently, many deep learnin...
+  [NBR_U hop=1 tok=688:738]
+    
+Neighbor A8: estimation action reflection towards deep interaction between conversational and recommender systems. Recommender systems are embracing conversational technologies to obtain user prefere...
+  [NBR_U hop=1 tok=738:788]
+    
+Neighbor A9: neural factorization machines for sparse predictive analytics. Many predictive tasks of web applications need to model categorical variables, such as user IDs and demographics like gende...
+  [NBR_U hop=1 tok=788:838]
+    
+Neighbor A10: hybrid deep embedding for recommendations with dynamic aspect level explanations. Explainable recommendation is far from being well solved partly due to three challenges. The first is t...
+  [NBR_U hop=2 tok=838:888]
+    
+Neighbor A11: infer implicit contexts in real time online to offline recommendation. Understanding users' context is essential for successful recommendations, especially for Online-to-Offline (O2O) r...
+  [NBR_U hop=2 tok=888:938]
+    
+Neighbor A12: neural attentive session based recommendation. Given e-commerce scenarios that user profiles are invisible, session-based recommendation is proposed to generate recommendation results f...
+  [NBR_U hop=2 tok=938:988]
+    
+Neighbor A13: relational collaborative filtering modeling multiple item relations for recommendation. Existing item-based collaborative filtering (ICF) methods leverage only the relation of collabora...
+  [NBR_U hop=2 tok=988:1038]
+    
+Neighbor A14: fat deepffm field attentive deep field aware factorization machine. Click through rate (CTR) estimation is a fundamental task in personalized advertising and recommender systems. Recent...
+  [NBR_U hop=2 tok=1038:1088]
+    
+Neighbor A15: feature generation by convolutional neural network for click through rate prediction. Click-Through Rate prediction is an important task in recommender systems, which aims to estimate t...
+  [NBR_U hop=2 tok=1088:1138]
+    
+Neighbor A16: distributed representations of words and phrases and their compositionality. The recently introduced continuous Skip-gram model is an efficient method for learning high-quality distribu...
+  [NBR_U hop=2 tok=1138:1188]
+    
+Neighbor A17: λopt learn to regularize recommender models in finer levels. Recommendation models mainly deal with categorical variables, such as user/item ID and attributes. Besides the high-cardinal...
+  [NBR_U hop=2 tok=1188:1238]
+    
+Neighbor A18: learning distributed representations from reviews for collaborative filtering. Recent work has shown that collaborative filter-based recommender systems can be improved by incorporating...
+  [NBR_U hop=2 tok=1238:1288]
+    
+Neighbor A19: neural rating regression with abstractive tips generation for recommendation. Recently, some E-commerce sites launch a new interaction box called Tips on their mobile apps. Users can ex...
+  [NBR_U hop=2 tok=1288:1338]
+    
+Neighbor A20: conet collaborative cross networks for cross domain recommendation. The cross-domain recommendation technique is an effective way of alleviating the data sparse issue in recommender sys...
+  [TARGET hop=0 tok=1338:1600]
+    
+Paper B: neural compatibility modeling with attentive knowledge distillation. Recently, the booming fashion sector and its huge potential benefits have attracted tremendous attention from many resear...
+  [NBR_V hop=1 tok=1600:1650]
+    
+Neighbor B1: a deep look into neural ranking models for information retrieval. Ranking models lie at the heart of research on information retrieval (IR). During the past decades, different techniques...
+  [NBR_V hop=1 tok=1650:1700]
+    
+Neighbor B2: mining fashion outfit composition using an end to end deep learning approach on set data. Composing fashion outfits involves deep under-standing of fashion standards while incorporating ...
+  [NBR_V hop=1 tok=1700:1750]
+    
+Neighbor B3: knowledge distillation for optimization of quantized deep neural networks. Knowledge distillation (KD) is a very popular method for model size reduction. Recently, the technique is explo...
+  [NBR_V hop=1 tok=1750:1800]
+    
+Neighbor B4: learning fashion compatibility with bidirectional lstms. The ubiquity of online fashion shopping demands effective recommendation services for customers. In this paper, we study two type...
+  [NBR_V hop=1 tok=1800:1850]
+    
+Neighbor B5: bridge correlational neural networks for multilingual multimodal representation learning. Recently there has been a lot of interest in learning common representations for multiple views ...
+  [NBR_V hop=1 tok=1850:1900]
+    
+Neighbor B6: deep representation learning for road detection through siamese network. Robust road detection is a key challenge in safe autonomous driving. Recently, with the rapid development of 3D s...
+  [NBR_V hop=1 tok=1900:1950]
+    
+Neighbor B7: vbpr visual bayesian personalized ranking from implicit feedback. Modern recommender systems model people and items by discovering or `teasing apart' the underlying dimensions that encod...
+  [NBR_V hop=1 tok=1950:2000]
+    
+Neighbor B8: image based recommendations on styles and substitutes. Humans inevitably develop a sense of the relationships between objects, some of which are based on their appearance. Some pairs of ...
+  [NBR_V hop=1 tok=2000:2050]
+    
+Neighbor B9: an attention based collaboration framework for multi view network representation learning. Learning distributed node representations in networks has been attracting increasing attention ...
+  [NBR_V hop=1 tok=2050:2100]
+    
+Neighbor B10: improving outfit recommendation with co supervision of fashion generation. The task of fashion recommendation includes two main challenges: visual understanding and visual matching. Vis...
+  [NBR_V hop=2 tok=2100:2150]
+    
+Neighbor B11: news session based recommendations using deep neural networks. News recommender systems are aimed to personalize users experiences and help them to discover relevant articles from a lar...
+  [NBR_V hop=2 tok=2150:2200]
+    
+Neighbor B12: the effects of gender signals and performance in online product reviews. This work quantifies the effects of signaling and performing gender on the success of reviews written on the pop...
+  [NBR_V hop=2 tok=2200:2250]
+    
+Neighbor B13: matchzoo a toolkit for deep text matching. In recent years, deep neural models have been widely adopted for text matching tasks, such as question answering and information retrieval, sh...
+  [NBR_V hop=2 tok=2250:2300]
+    
+Neighbor B14: cross domain image retrieval with a dual attribute aware ranking network. We address the problem of cross-domain image retrieval, considering the following practical application: given ...
+  [NBR_V hop=2 tok=2300:2350]
+    
+Neighbor B15: mv rnn a multi view recurrent neural network for sequential recommendation. Sequential recommendation is a fundamental task for network applications, and it usually suffers from the ite...
+  [NBR_V hop=2 tok=2350:2400]
+    
+Neighbor B16: cross domain regularization for neural ranking models using adversarial learning. Unlike traditional learning to rank models that depend on hand-crafted features, neural representation ...
+  [NBR_V hop=2 tok=2400:2450]
+    
+Neighbor B17: deepstyle multimodal search engine for fashion and interior design. In this paper, we propose a multimodal search engine that combines visual and textual cues to retrieve items from a m...
+  [NBR_V hop=2 tok=2450:2500]
+    
+Neighbor B18: exploiting invertible decoders for unsupervised sentence representation learning. The encoder-decoder models for unsupervised sentence representation learning tend to discard the decode...
+  [NBR_V hop=2 tok=2500:2550]
+    
+Neighbor B19: multimodal machine learning a survey and taxonomy. Our experience of the world is multimodal - we see objects, hear sounds, feel texture, smell odors, and taste flavors. Modality refers...
+  [NBR_V hop=2 tok=2550:2600]
+    
+Neighbor B20: deep learning based recommender system a survey and new perspectives. With the growing volume of online information, recommender systems have been an effective strategy to overcome info...
+  [QUESTION hop=0 tok=2600:2614]
+    
+Do Paper A and Paper B cite each other? Answer: yes
+
+  ANSWER (supervised, 1 token at pos 2613): ' yes'
+
+------------------------------------------------------------------------------
+  sample 3 | label = yes | tokens = 2451 | NBR_U = 14 | NBR_V = 19
+------------------------------------------------------------------------------
+
+  [TARGET hop=0 tok=0:230]
+    Paper A: the abc of digital business ecosystems. The European Commission has the power to inspire, initiate and sponsor huge transnational projects to an extent impossible for most other entities. The...
+  [NBR_U hop=1 tok=230:302]
+    
+Neighbor A1: stability of evolving multiagent systems. A multiagent system is a distributed system where the agents or nodes perform complex functions that cannot be written down in analytic form. Mu...
+  [NBR_U hop=1 tok=302:374]
+    
+Neighbor A2: tourism destinations as digital business ecosystems. Tourism has been experiencing very relevant changes since when Information and Communication Technologies (ICTs), in all their forms,...
+  [NBR_U hop=1 tok=374:446]
+    
+Neighbor A3: complex adaptive digital ecosystems. We investigate an abstract conceptualisation of DigitalEcosystems from a computer science perspective. We then provide a conceptual framework for the...
+  [NBR_U hop=1 tok=446:518]
+    
+Neighbor A4: self organisation of evolving agent populations in digital ecosystems. We investigate the self-organising behaviour of Digital Ecosystems, because a primary motivation for our research i...
+  [NBR_U hop=2 tok=518:590]
+    
+Neighbor A5: digital ecosystems self organisation of evolving agent populations. A primary motivation for our research in Digital Ecosystems is the desire to exploit the self-organising properties of...
+  [NBR_U hop=2 tok=590:662]
+    
+Neighbor A6: digital ecosystems optimisation by a distributed intelligence. Can intelligence optimise Digital Ecosystems? How could a distributed intelligence interact with the ecosystem dynamics? Ca...
+  [NBR_U hop=2 tok=662:734]
+    
+Neighbor A7: bridging ecology and cloud transposing ecological prespective to enable better cloud autoscaling. Elastic autoscaling is the fundamental mechanism that enables the cloud-based services t...
+  [NBR_U hop=2 tok=734:806]
+    
+Neighbor A8: biology of applied digital ecosystems. A primary motivation for research in digital ecosystems is the desire to exploit the self-organising properties of natural ecosystems. Ecosystems a...
+  [NBR_U hop=2 tok=806:878]
+    
+Neighbor A9: digital ecosystems ecosystem oriented architectures. We view Digital Ecosystems to be the digital counterparts of biological ecosystems. Here, we are concerned with the creation of these...
+  [NBR_U hop=2 tok=878:950]
+    
+Neighbor A10: digital ecosystems stability of evolving agent populations. Stability is perhaps one of the most desirable features of any engineered system, given the importance of being able to predi...
+  [NBR_U hop=2 tok=950:1022]
+    
+Neighbor A11: community cloud computing. Cloud Computing is rising fast, with its data centres growing at an unprecedented rate. However, this has come with concerns over privacy, efficiency at the e...
+  [NBR_U hop=2 tok=1022:1094]
+    
+Neighbor A12: the computing of digital ecosystems. A primary motivation for our research in digital ecosystems is the desire to exploit the self-organising properties of biological ecosystems. Ecosys...
+  [NBR_U hop=2 tok=1094:1166]
+    
+Neighbor A13: auction based resource allocation in digital ecosystems. The proliferation of portable devices (PDAs, smartphones, digital multimedia players, and so forth) allows mobile users to carry...
+  [NBR_U hop=2 tok=1166:1238]
+    
+Neighbor A14: digital ecosystems in the clouds towards community cloud computing. Cloud Computing is rising fast, with its data centres growing at an unprecedented rate. However, this has come with c...
+  [TARGET hop=0 tok=1238:1430]
+    
+Paper B: ecosystem oriented distributed evolutionary computing. We create a novel optimisation technique inspired by natural ecosystems, where the optimisation works at two levels: a first optimisati...
+  [NBR_V hop=1 tok=1430:1483]
+    
+Neighbor B1: self organisation of evolving agent populations in digital ecosystems. We investigate the self-organising behaviour of Digital Ecosystems, because a primary motivation for our research i...
+  [NBR_V hop=1 tok=1483:1536]
+    
+Neighbor B2: complex adaptive digital ecosystems. We investigate an abstract conceptualisation of DigitalEcosystems from a computer science perspective. We then provide a conceptual framework for the...
+  [NBR_V hop=1 tok=1536:1589]
+    
+Neighbor B3: digital ecosystems self organisation of evolving agent populations. A primary motivation for our research in Digital Ecosystems is the desire to exploit the self-organising properties of...
+  [NBR_V hop=1 tok=1589:1642]
+    
+Neighbor B4: digital ecosystems evolving service oriented architectures. We view Digital Ecosystems to be the digital counterparts of biological ecosystems, exploiting the self-organising properties ...
+  [NBR_V hop=1 tok=1642:1695]
+    
+Neighbor B5: bridging ecology and cloud transposing ecological prespective to enable better cloud autoscaling. Elastic autoscaling is the fundamental mechanism that enables the cloud-based services t...
+  [NBR_V hop=1 tok=1695:1748]
+    
+Neighbor B6: stability of evolving multiagent systems. A multiagent system is a distributed system where the agents or nodes perform complex functions that cannot be written down in analytic form. Mu...
+  [NBR_V hop=1 tok=1748:1801]
+    
+Neighbor B7: digital ecosystems optimisation by a distributed intelligence. Can intelligence optimise Digital Ecosystems? How could a distributed intelligence interact with the ecosystem dynamics? Ca...
+  [NBR_V hop=1 tok=1801:1854]
+    
+Neighbor B8: digital ecosystems ecosystem oriented architectures. We view Digital Ecosystems to be the digital counterparts of biological ecosystems. Here, we are concerned with the creation of these...
+  [NBR_V hop=1 tok=1854:1907]
+    
+Neighbor B9: the computing of digital ecosystems. A primary motivation for our research in digital ecosystems is the desire to exploit the self-organising properties of biological ecosystems. Ecosyst...
+  [NBR_V hop=2 tok=1907:1960]
+    
+Neighbor B10: biology of applied digital ecosystems. A primary motivation for research in digital ecosystems is the desire to exploit the self-organising properties of natural ecosystems. Ecosystems ...
+  [NBR_V hop=2 tok=1960:2013]
+    
+Neighbor B11: scalability and optimisation of a committee of agents using genetic algorithm. A population of committees of agents that learn by using neural networks is implemented to simulate the st...
+  [NBR_V hop=2 tok=2013:2066]
+    
+Neighbor B12: pervasive service architecture for a digital business ecosystem. In this paper we present ideas and architectural principles upon which we are basing the development of a distributed, o...
+  [NBR_V hop=2 tok=2066:2119]
+    
+Neighbor B13: digital identity in the absence of authorities a new socio technical approach. On the Internet large service providers tend to control the digital identities of users. These defacto ide...
+  [NBR_V hop=2 tok=2119:2172]
+    
+Neighbor B14: avoiding the bloat with stochastic grammar based genetic programming. The application of Genetic Programming to the discovery of empirical laws is often impaired by the huge size of the...
+  [NBR_V hop=2 tok=2172:2225]
+    
+Neighbor B15: community cloud computing. Cloud Computing is rising fast, with its data centres growing at an unprecedented rate. However, this has come with concerns over privacy, efficiency at the e...
+  [NBR_V hop=2 tok=2225:2278]
+    
+Neighbor B16: digital ecosystems in the clouds towards community cloud computing. Cloud Computing is rising fast, with its data centres growing at an unprecedented rate. However, this has come with c...
+  [NBR_V hop=2 tok=2278:2331]
+    
+Neighbor B17: computing of applied digital ecosystems. A primary motivation for our research in digital ecosystems is the desire to exploit the self-organising properties of biological ecosystems. Ec...
+  [NBR_V hop=2 tok=2331:2384]
+    
+Neighbor B18: creating a digital ecosystem service oriented architectures with distributed evolutionary computing. We start with a discussion of the relevant literature, including Nature Inspired Com...
+  [NBR_V hop=2 tok=2384:2437]
+    
+Neighbor B19: digital ecosystems stability of evolving agent populations. Stability is perhaps one of the most desirable features of any engineered system, given the importance of being able to predi...
+  [QUESTION hop=0 tok=2437:2451]
+    
+Do Paper A and Paper B cite each other? Answer: yes
+
+  ANSWER (supervised, 1 token at pos 2450): ' yes'
+
+------------------------------------------------------------------------------
+  sample 0 | label = no | tokens = 1299 | NBR_U = 20 | NBR_V = 0
+------------------------------------------------------------------------------
+
+  [TARGET hop=0 tok=0:124]
+    Paper A: gen slam generative modeling for monocular simultaneous localization and mapping. We present a Deep Learning based system for the twin tasks of localization and obstacle avoidance essential t...
+  [NBR_U hop=1 tok=124:174]
+    
+Neighbor A1: unsupervised image to image translation networks. Unsupervised image-to-image translation aims at learning a joint distribution of images in different domains by using images from the ma...
+  [NBR_U hop=1 tok=174:224]
+    
+Neighbor A2: unpaired image to image translation using cycle consistent adversarial networks. Image-to-image translation is a class of vision and graphics problems where the goal is to learn the mapp...
+  [NBR_U hop=1 tok=224:274]
+    
+Neighbor A3: unsupervised learning of depth and ego motion from video. We present an unsupervised learning framework for the task of monocular depth and camera motion estimation from unstructured vid...
+  [NBR_U hop=1 tok=274:324]
+    
+Neighbor A4: neural discrete representation learning. Learning useful representations without supervision remains a key challenge in machine learning. In this paper, we propose a simple yet powerful ...
+  [NBR_U hop=1 tok=324:374]
+    
+Neighbor A5: a survey of simultaneous localization and mapping with an envision in 6g wireless networks. Simultaneous Localization and Mapping (SLAM) achieves the purpose of simultaneous positioning ...
+  [NBR_U hop=1 tok=374:424]
+    
+Neighbor A6: depth map prediction from a single image using a multi scale deep network. Predicting depth is an essential component in understanding the 3D geometry of a scene. While for stereo images...
+  [NBR_U hop=1 tok=424:474]
+    
+Neighbor A7: unsupervised representation learning with deep convolutional generative adversarial networks. In recent years, supervised learning with convolutional networks (CNNs) has seen huge adopti...
+  [NBR_U hop=1 tok=474:524]
+    
+Neighbor A8: autoencoding beyond pixels using a learned similarity metric. We present an autoencoder that leverages learned representations to better measure similarities in data space. By combining ...
+  [NBR_U hop=1 tok=524:574]
+    
+Neighbor A9: unsupervised cnn for single view depth estimation geometry to the rescue. A significant weakness of most current deep Convolutional Neural Networks is the need to train them using vast a...
+  [NBR_U hop=1 tok=574:624]
+    
+Neighbor A10: orb slam2 an open source slam system for monocular stereo and rgb d cameras. We present ORB-SLAM2, a complete simultaneous localization and mapping (SLAM) system for monocular, stereo a...
+  [NBR_U hop=2 tok=624:674]
+    
+Neighbor A11: unsupervised representation learning by predicting image rotations. Over the last years, deep convolutional neural networks (ConvNets) have transformed the field of computer vision than...
+  [NBR_U hop=2 tok=674:724]
+    
+Neighbor A12: machine speech chain with one shot speaker adaptation. In previous work, we developed a closed-loop speech chain model based on deep learning, in which the architecture enabled the auto...
+  [NBR_U hop=2 tok=724:774]
+    
+Neighbor A13: gslam a general slam framework and benchmark. SLAM technology has recently seen many successes and attracted the attention of high-technological companies. However, how to unify the int...
+  [NBR_U hop=2 tok=774:824]
+    
+Neighbor A14: hi net hybrid fusion network for multi modal mr image synthesis. Magnetic resonance imaging (MRI) is a widely used neuroimaging technique that can provide images of different contrasts ...
+  [NBR_U hop=2 tok=824:874]
+    
+Neighbor A15: style aggregated network for facial landmark detection. Recent advances in facial landmark detection achieve success by learning discriminative features from rich deformation of face sh...
+  [NBR_U hop=2 tok=874:924]
+    
+Neighbor A16: lucss language based user customized colourization of scene sketches. We introduce LUCSS, a language-based system for interactive col- orization of scene sketches, based on their semant...
+  [NBR_U hop=2 tok=924:974]
+    
+Neighbor A17: variational prototyping encoder one shot learning with prototypical images. In daily life, graphic symbols, such as traffic signs and brand logos, are ubiquitously utilized around us du...
+  [NBR_U hop=2 tok=974:1024]
+    
+Neighbor A18: miso mutual information loss with stochastic style representations for multimodal image to image translation. Unpaired multimodal image-to-image translation is a task of translating a g...
+  [NBR_U hop=2 tok=1024:1074]
+    
+Neighbor A19: composable unpaired image to image translation. There has been remarkable recent work in unpaired image-to-image translation. However, they're restricted to translation on single pairs ...
+  [NBR_U hop=2 tok=1074:1124]
+    
+Neighbor A20: unsupervised event based learning of optical flow depth and egomotion. In this work, we propose a novel framework for unsupervised learning for event cameras that learns motion informat...
+  [TARGET hop=0 tok=1124:1285]
+    
+Paper B: a grammar based compressed representation of 3d trajectories. Much research has been published about trajectory management on the ground or at the sea, but compression or indexing of flight ...
+  [QUESTION hop=0 tok=1285:1299]
+    
+Do Paper A and Paper B cite each other? Answer: no
+
+  ANSWER (supervised, 1 token at pos 1298): ' no'
+
+------------------------------------------------------------------------------
+  sample 1 | label = no | tokens = 2527 | NBR_U = 11 | NBR_V = 18
+------------------------------------------------------------------------------
+
+  [TARGET hop=0 tok=0:275]
+    Paper A: automatic detection of public development projects in large open source ecosystems an exploratory study on github. Hosting over 10 million of software projects, GitHub is one of the most impo...
+  [NBR_U hop=1 tok=275:367]
+    
+Neighbor A1: an insight into the pull requests of github. Given the increasing number of unsuccessful pull requests in GitHub projects, insights into the success and failure of these requests are ess...
+  [NBR_U hop=2 tok=367:459]
+    
+Neighbor A2: on github s programming languages. GitHub is the most widely used social, distributed version control system. It has around 10 million registered users and hosts over 16 million public r...
+  [NBR_U hop=2 tok=459:551]
+    
+Neighbor A3: on the impact of pull request decisions on future contributions. The pull-based development process has become prevalent on platforms such as GitHub as a form of distributed software dev...
+  [NBR_U hop=2 tok=551:643]
+    
+Neighbor A4: does code quality affect pull request acceptance an empirical study. Background. Pull requests are a common practice for contributing and reviewing contributions, and are employed both i...
+  [NBR_U hop=2 tok=643:735]
+    
+Neighbor A5: automatic generation of pull request descriptions. Enabled by the pull-based development model, developers can easily contribute to a project through pull requests (PRs). When creating a...
+  [NBR_U hop=2 tok=735:827]
+    
+Neighbor A6: ge852 a dataset of 852 game engines. Game engines provide a platform for developers to build games with an interface tailored to handle the complexity during game development. To reduce ...
+  [NBR_U hop=2 tok=827:919]
+    
+Neighbor A7: which pull requests get accepted and why a study of popular npm packages. Background: Pull Request (PR) Integrators often face challenges in terms of multiple concurrent PRs, so the abil...
+  [NBR_U hop=2 tok=919:1011]
+    
+Neighbor A8: replicating and scaling up qualitative analysis using crowdsourcing a github based case study. Due to the difficulties in replicating and scaling up qualitative studies, such studies are...
+  [NBR_U hop=2 tok=1011:1103]
+    
+Neighbor A9: wisdom in sum of parts multi platform activity prediction in social collaborative sites. In this paper, we proposed a novel framework which uses user interests inferred from activities (...
+  [NBR_U hop=2 tok=1103:1195]
+    
+Neighbor A10: github and stack over ow analyzing developer interests across multiple social collaborative platforms. Increasingly, software developers are using a wide array of social collaborative p...
+  [NBR_U hop=2 tok=1195:1287]
+    
+Neighbor A11: replication can improve prior results a github study of pull request acceptance. Crowdsourcing and data mining can be used to effectively reduce the effort associated with the partial r...
+  [TARGET hop=0 tok=1287:1505]
+    
+Paper B: ner and pos when nothing is capitalized. For those languages which use it, capitalization is an important signal for the fundamental NLP tasks of Named Entity Recognition (NER) and Part of S...
+  [NBR_V hop=1 tok=1505:1561]
+    
+Neighbor B1: robust named entity recognition with truecasing pretraining. Although modern named entity recognition (NER) systems show impressive performance on standard datasets, they perform poorly ...
+  [NBR_V hop=1 tok=1561:1617]
+    
+Neighbor B2: introduction to the conll 2003 shared task language independent named entity recognition. We describe the CoNLL-2003 shared task: language-independent named entity recognition. We give b...
+  [NBR_V hop=1 tok=1617:1673]
+    
+Neighbor B3: bert pre training of deep bidirectional transformers for language understanding. We introduce a new language representation model called BERT, which stands for Bidirectional Encoder Repr...
+  [NBR_V hop=1 tok=1673:1729]
+    
+Neighbor B4: finding function in form compositional character models for open vocabulary word representation. We introduce a model for constructing vector representations of words by composing charac...
+  [NBR_V hop=1 tok=1729:1785]
+    
+Neighbor B5: detecting potential topics in news using bert crf and wikipedia. For a news content distribution platform like Dailyhunt, Named Entity Recognition is a pivotal task for building better u...
+  [NBR_V hop=1 tok=1785:1841]
+    
+Neighbor B6: end to end sequence labeling via bi directional lstm cnns crf. State-of-the-art sequence labeling systems traditionally require large amounts of task-specific knowledge in the form of ha...
+  [NBR_V hop=1 tok=1841:1897]
+    
+Neighbor B7: allennlp a deep semantic natural language processing platform. This paper describes AllenNLP, a platform for research on deep learning methods in natural language understanding. AllenNLP...
+  [NBR_V hop=1 tok=1897:1953]
+    
+Neighbor B8: deep contextualized word representations. We introduce a new type of deep contextualized word representation that models both (1) complex characteristics of word use (e.g., syntax and se...
+  [NBR_V hop=2 tok=1953:2009]
+    
+Neighbor B9: ai and holistic review informing human reading in college admissions. College admissions in the United States is carried out by a human-centered method of evaluation known as holistic re...
+  [NBR_V hop=2 tok=2009:2065]
+    
+Neighbor B10: deep unsupervised cardinality estimation. Cardinality estimation has long been grounded in statistical tools for density estimation. To capture the rich multivariate distributions of re...
+  [NBR_V hop=2 tok=2065:2121]
+    
+Neighbor B11: semi supervised class discovery. One promising approach to dealing with datapoints that are outside of the initial training distribution (OOD) is to create new classes that capture simi...
+  [NBR_V hop=2 tok=2121:2177]
+    
+Neighbor B12: what do neural machine translation models learn about morphology. Neural machine translation (MT) models obtain state-of-the-art performance while maintaining a simple, end-to-end archi...
+  [NBR_V hop=2 tok=2177:2233]
+    
+Neighbor B13: can ner convolutional attention network for chinese named entity recognition. Named entity recognition (NER) in Chinese is essential but difficult because of the lack of natural delimit...
+  [NBR_V hop=2 tok=2233:2289]
+    
+Neighbor B14: med7 a transferable clinical natural language processing model for electronic health records. The field of clinical natural language processing has been advanced significantly since the...
+  [NBR_V hop=2 tok=2289:2345]
+    
+Neighbor B15: casting light on invisible cities computationally engaging with literary criticism. Literary critics often attempt to uncover meaning in a single work of literature through careful read...
+  [NBR_V hop=2 tok=2345:2401]
+    
+Neighbor B16: bridging the gap attending to discontinuity in identification of multiword expressions. We introduce a new method to tag Multiword Expressions (MWEs) using a linguistically interpretabl...
+  [NBR_V hop=2 tok=2401:2457]
+    
+Neighbor B17: a survey of deep learning techniques for neural machine translation. In recent years, natural language processing (NLP) has got great development with deep learning techniques. In the s...
+  [NBR_V hop=2 tok=2457:2513]
+    
+Neighbor B18: multimodal transformer for unaligned multimodal language sequences. Human language is often multimodal, which comprehends a mixture of natural language, facial gestures, and acoustic be...
+  [QUESTION hop=0 tok=2513:2527]
+    
+Do Paper A and Paper B cite each other? Answer: no
+
+  ANSWER (supervised, 1 token at pos 2526): ' no'
