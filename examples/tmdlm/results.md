@@ -51,6 +51,37 @@ Source: LLaGA (arXiv:2402.08170), Table 1 (Single Focus). Note our PubMed split 
 | SGC         | GNN                   | 87.35    |
 
 
+### Link Prediction (LP) — supervised
+
+Source: LLaGA (arXiv:2402.08170), Table 1, "Single Focus" setting (task-specific SFT per dataset — closest to our recipe). Accuracy (%) on each dataset's LP test split. LLaGA does not report AUC.
+
+Our edge split is a deterministic random 85 / 5 / 10 with `seed=42` (`dllm/data/datasets/_lp_common.py`), not the same split LLaGA uses, so absolute numbers are indicative — not directly head-to-head.
+
+
+| Method        | Type                  | Cora        | PubMed      | ogbn-arxiv  | ogbn-products |
+| ------------- | --------------------- | ----------- | ----------- | ----------- | ------------- |
+| GCN           | GNN                   | 85.09       | 94.55       | 92.28       | 93.89         |
+| GAT           | GNN                   | 82.68       | 87.60       | 87.78       | 94.19         |
+| GraphSAGE     | GNN                   | 79.94       | 93.87       | 92.75       | 95.22         |
+| NodeFormer    | Graph Transformer     | 81.79       | 84.43       | 92.60       | 96.13         |
+| LLaGA-ND-7B   | LLM + Graph Projector | **92.71** ⭐ | 96.49       | 93.31       | **97.85** ⭐  |
+| LLaGA-HO-7B   | LLM + Graph Projector | 92.65       | **96.95** ⭐ | **96.18** ⭐ | 95.88         |
+
+
+### Our base LLaDA-8B-Instruct (zero-shot, no SFT)
+
+Sanity baseline for LP before any fine-tuning: a frozen LLaDA-8B-Instruct receives the same text-LP prompt (`Paper A: <text>. Neighbor A1: ... Paper B: <text>. Neighbor B1: ... Do Paper A and Paper B cite each other? Answer:`) and we score the `' yes'` vs `' no'` token logits at the answer position (`examples/tmdlm/eval_lp_logit.py`).
+
+
+| Dataset | Samples | Accuracy | AUC    | Per-label acc (no / yes) |
+| ------- | ------: | -------: | -----: | ------------------------ |
+| Cora    | 1,054   | 52.18    | 0.5668 | 72.68 / 31.69            |
+
+
+JSONL: `.models/eval_logs/lp_base_zeroshot.jsonl`. Config: `max_seq_len=4096`, `max_neighbors_per_hop=10`, `max_hops=2`, `use_topology_mask=True`, `batch_size=4`, `seed=42`.
+
+The base model is essentially at random chance (50% chance line) with a strong prior toward "no": 72.7 % recall on true non-edges, only 31.7 % on true edges. AUC 0.567 shows a weak ranking signal but the decision boundary is far from optimal. The model has not been exposed to "do these two papers cite each other?" supervision in pretraining; LP therefore requires task-specific SFT — motivating the LP runs in §21+ (to follow).
+
 ---
 
 ## §1. Cora — SFT mc_digit nonb (run tag `cora_20260429_mcdigit_nonb_fixed`)
