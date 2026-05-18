@@ -1,0 +1,94 @@
+==============================================================================
+Node-description SFT prompts (prompt_format = nd_describe / nda_describe)
+==============================================================================
+
+These are the exact strings produced by dllm/data/graph.py::_build_node_sample_nd,
+serialized through the Llama-3-style chat template. The center node's own text
+is NEVER shown to the model; the model must produce a templated description
+from neighbor texts + the cls label.
+
+Structure of input_ids (every sample):
+
+  <BOS> <|start_header_id|> user <|end_header_id|> \n\n
+    [neighbor block]
+    \nPlease briefly describe the center paper.
+  <|eot_id|> <|start_header_id|> assistant <|end_header_id|> \n\n
+    [assistant target — supervised]
+
+Labels are -100 everywhere except the assistant span (so TM-DLM masking/loss
+only fires on the description).
+
+------------------------------------------------------------------------------
+Example 1 — nd_describe, arxiv, with 3 neighbors
+------------------------------------------------------------------------------
+
+USER:
+Neighbor 1: Attention is all you need. We propose the Transformer, a model architecture relying entirely on attention mechanisms ...
+Neighbor 2: BERT: Pre-training of deep bidirectional transformers for language understanding. We introduce a new language representation model ...
+Neighbor 3: GPT-3: language models are few-shot learners. Recent work has demonstrated substantial gains on many NLP tasks ...
+Please briefly describe the center paper.
+
+ASSISTANT (target, supervised):
+This is a paper in cs.LG domain, it's about Efficient Long-Context Transformers via Sparse Attention.
+
+------------------------------------------------------------------------------
+Example 2 — nda_describe, arxiv, abstract included
+------------------------------------------------------------------------------
+
+USER:
+Neighbor 1: Graph attention networks. We present graph attention networks (GATs), novel neural network architectures ...
+Neighbor 2: Semi-supervised classification with graph convolutional networks. We present a scalable approach ...
+Please briefly describe the center paper.
+
+ASSISTANT (target, supervised):
+This is a paper in cs.LG domain, its title is Heterogeneous Graph Transformer for Web-Scale Recommendation, its abstract is We address the heterogeneity problem on web-scale graphs by proposing a multi-relation transformer that aggregates type-aware messages and scales to billion-edge graphs through subgraph sampling.
+
+------------------------------------------------------------------------------
+Example 3 — nd_describe, cora, single neighbor (sparse node)
+------------------------------------------------------------------------------
+
+USER:
+Neighbor 1: Reinforcement learning: a survey. This paper surveys the field of reinforcement learning from a computer-science perspective ...
+Please briefly describe the center paper.
+
+ASSISTANT (target, supervised):
+This is a paper in Reinforcement_Learning domain, it's about Q-learning with Function Approximation in Continuous State Spaces.
+
+------------------------------------------------------------------------------
+Example 4 — nd_describe, missing title (degenerate fallback)
+------------------------------------------------------------------------------
+
+USER:
+Neighbor 1: Learning to rank with gradient boosting ...
+Neighbor 2: LambdaMART: a boosted ranking algorithm ...
+Please briefly describe the center paper.
+
+ASSISTANT (target, supervised):
+This is a paper in Information_Retrieval domain.
+
+------------------------------------------------------------------------------
+Example 5 — nda_describe, missing abstract but title present
+------------------------------------------------------------------------------
+
+USER:
+Neighbor 1: Diffusion models beat GANs on image synthesis ...
+Neighbor 2: Score-based generative modeling through stochastic differential equations ...
+Neighbor 3: Denoising diffusion probabilistic models ...
+Please briefly describe the center paper.
+
+ASSISTANT (target, supervised):
+This is a paper in cs.CV domain, its title is Cascaded Diffusion for High-Fidelity Text-to-Image Synthesis.
+
+------------------------------------------------------------------------------
+Notes on supervision
+------------------------------------------------------------------------------
+
+- node_spans[0]   = the assistant span (used for TM-DLM masking).
+- node_spans[1:]  = each kept neighbor's tokens inside the user-content region
+                    (offset by content_offset = position of <|eot_id|> in the
+                    empty user template).
+- node_hops[0]    = 0  (center, but text is excluded — span only holds answer).
+- node_hops[1:]   = hop distance of the corresponding neighbor.
+- Length budget:  neighbors are truncated per `per_nb_budget`; if the resulting
+                  template still overflows max_seq_len, the template (not the
+                  answer) is trimmed so the assistant target always survives.
