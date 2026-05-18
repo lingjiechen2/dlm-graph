@@ -1,0 +1,208 @@
+==============================================================================
+  Link-prediction SFT prompts (task = lp)
+==============================================================================
+
+Real samples produced by dllm.data.graph.build_edge_sample for both
+supported datasets. Each LP sample asks the model to judge whether
+two papers cite each other given each paper's title+abstract and a
+small neighbourhood for each.
+
+Sequence layout (all body tokens, no chat template):
+
+  Paper A: <u.title>. <u.abstract>
+  Neighbor A1: <u_nb_1.title>. <u_nb_1.abstract>
+  ... up to max_neighbors_per_hop × max_hops kept
+  Paper B: <v.title>. <v.abstract>
+  Neighbor B1: ...
+  Do Paper A and Paper B cite each other? Answer: <yes|no>
+
+Labels are -100 everywhere except the final answer token. node_spans
++ node_roles enumerate each region (0=TARGET, 1=NBR_U, 2=NBR_V,
+3=QUESTION).
+
+Leak prevention:
+  - cora_lp / arxiv_lp build `adj_train` with all val+test positives
+    removed before neighbour sampling.
+  - _sample_lp_neighbors additionally filters v from u's pool and
+    vice versa; shared neighbours appear under one side only.
+
+
+==============================================================================
+  Dataset: cora
+==============================================================================
+
+LP cora (train) pos=4488 neg=4488
+
+------------------------------------------------------------------------------
+  cora — sample 2 (label = yes, input_ids = 2407 tokens)
+------------------------------------------------------------------------------
+
+  [TARGET hop=0 tok=0:312]
+    Paper A: Hierarchical Mixtures of Experts and the EM Algorithm. We present a tree-structured architecture for supervised learning. The statistical model underlying the architecture is a hierarchical mixture model in whic...
+  [NBR_U hop=1 tok=312:413]
+    Neighbor A1: Avoiding overfitting by locally matching the noise level of the data gating network discovers the. When trying to forecast the future behavior of a real-world system, two of the key problems are nonstationar...
+  [NBR_U hop=1 tok=413:514]
+    Neighbor A2: Combining Linear Discriminant Functions with Neural Networks for Supervised Learning. A novel supervised learning method is presented by combining linear discriminant functions with neural networks. The prop...
+  [NBR_U hop=1 tok=514:615]
+    Neighbor A3: A Gentle Tutorial of the EM Algorithm and its Application to Parameter Estimation for Gaussian. We describe the maximum-likelihood parameter estimation problem and how the Expectation-Maximization (EM) algor...
+  [NBR_U hop=1 tok=615:716]
+    Neighbor A4: . Convergence Results for the EM Approach to Abstract The Expectation-Maximization (EM) algorithm is an iterative approach to maximum likelihood parameter estimation. Jordan and Jacobs (1993) recently propos...
+  [NBR_U hop=1 tok=716:817]
+    Neighbor A5: Function Approximation with Neural Networks and Local Methods: Bias, Variance and Smoothness. We review the use of global and local methods for estimating a function mapping R m ) R n from samples of the fun...
+  [NBR_U hop=2 tok=817:918]
+    Neighbor A6: Forecasting electricity demand using nonlinear mixture of experts. In this paper we study a forecasting model based on mixture of experts for predicting the French electric daily consumption energy. We split...
+  [NBR_U hop=2 tok=918:954]
+    Neighbor A7: Constructive Training Methods for Feedforward Neural Networks with Binary Weights. DIMACS Technical Report 95-35 August 1995
+  [NBR_U hop=2 tok=954:1055]
+    Neighbor A8: On Convergence Properties of the EM Algorithm for Gaussian Mixtures. We build up the mathematical connection between the "Expectation-Maximization" (EM) algorithm and gradient-based approaches for maximum li...
+  [NBR_U hop=2 tok=1055:1156]
+    Neighbor A9: On Convergence of the EM Algorithm and the Gibbs Sampler  SUMMARY. In this article we investigate the relationship between the two popular algorithms, the EM algorithm and the Gibbs sampler. We show that the...
+  [NBR_U hop=2 tok=1156:1257]
+    Neighbor A10: Priors, Stabilizers and Basis Functions: from regularization to radial, tensor and additive splines. We had previously shown that regularization principles lead to approximation schemes which are equivalent...
+  [TARGET hop=0 tok=1257:1595]
+    Paper B: Learning from incomplete data. Real-world learning tasks often involve high-dimensional data sets with complex patterns of missing features. In this paper we review the problem of learning from incomplete data f...
+  [NBR_V hop=1 tok=1595:1751]
+    Neighbor B1: Learning networks for face analysis and synthesis. This paper presents an overview of the face-related projects in our group. The unifying theme underlying our work is the use of example-based learning metho...
+  [NBR_V hop=2 tok=1751:1860]
+    Neighbor B2: In Advances in Neural Information Processing Systems 8  Gaussian Processes for Regression. The Bayesian analysis of neural networks is difficult because a simple prior over weights implies a complex prior di...
+  [NBR_V hop=2 tok=1860:2063]
+    Neighbor B3: Comparing Support Vector Machines with Gaussian Kernels to Radial Basis Function Classifiers. The Support Vector (SV) machine is a novel type of learning machine, based on statistical learning theory, which ...
+  [NBR_V hop=2 tok=2063:2266]
+    Neighbor B4: A Modular Q-Learning Architecture for Manipulator Task Decomposition `Data storage in the cerebellar model ar. Compositional Q-Learning (CQ-L) (Singh 1992) is a modular approach to learning to perform compos...
+  [NBR_V hop=2 tok=2266:2393]
+    Neighbor B5: GROWING RADIAL BASIS FUNCTION NETWORKS. This paper presents and evaluates two algorithms for incrementally constructing Radial Basis Function Networks, a class of neural networks which looks more suitable fo...
+  [QUESTION hop=0 tok=2393:2407]
+    Do Paper A and Paper B cite each other? Answer: yes
+
+  ANSWER (supervised, 1 token at pos 2406): ' yes'
+
+------------------------------------------------------------------------------
+  cora — sample 0 (label = no, input_ids = 1511 tokens)
+------------------------------------------------------------------------------
+
+  [TARGET hop=0 tok=0:24]
+    Paper A: Generalized Queries on Probabilistic Context-Free Grammars  on Pattern Analysis and Machine Intelligence.
+  [NBR_U hop=1 tok=24:193]
+    Neighbor A1: Accounting for Context in Plan Recognition, with Application to Traffic Monitoring. Typical approaches to plan recognition start from a representation of an agent's possible plans, and reason evidentially fr...
+  [NBR_U hop=1 tok=193:275]
+    Neighbor A2: Topological Parameters for time-space tradeoff. In this paper we propose a family of algorithms combining tree-clustering with conditioning that trade space for time. Such algorithms are useful for reasoning...
+  [NBR_U hop=2 tok=275:395]
+    Neighbor A3: The BATmobile: Towards a Bayesian Automated Taxi. The problem of driving an autonomous vehicle in highway traffic engages many areas of AI research and has substantial economic significance. We describe work...
+  [NBR_U hop=2 tok=395:532]
+    Neighbor A4: The Automated Mapping of Plans for Plan Recognition. To coordinate with other agents in its environment, an agent needs models of what the other agents are trying to do. When communication is impossible or e...
+  [NBR_U hop=2 tok=532:582]
+    Neighbor A5: Sonderforschungsbereich 314 K unstliche Intelligenz Wissensbasierte Systeme KI-Labor am Lehrstuhl f ur Informatik IV Numerical.
+  [NBR_U hop=2 tok=582:708]
+    Neighbor A6: BUCKET ELIMINATION: A UNIFYING FRAMEWORK FOR PROBABILISTIC INFERENCE. Probabilistic inference algorithms for belief updating, finding the most probable explanation, the maximum a posteriori hypothesis, and t...
+  [TARGET hop=0 tok=708:784]
+    Paper B: Genetic Programming for Pedestrians. We propose an extension to the Genetic Programming paradigm which allows users of traditional Genetic Algorithms to evolve computer programs. To this end, we have to introduc...
+  [NBR_V hop=1 tok=784:895]
+    Neighbor B1: Genetic Programming Estimates of Kolmogorov Complexity. In this paper the problem of the Kolmogorov complexity related to binary strings is faced. We propose a Genetic Programming approach which consists in ...
+  [NBR_V hop=1 tok=895:1040]
+    Neighbor B2: 4 Implementing Application Specific Routines  Genetic algorithms in search, optimization, and machine learning. Reading, MA: Addison-Wesley.. To implement a specific application, you should only have to chan...
+  [NBR_V hop=2 tok=1040:1058]
+    Neighbor B3: University of Nevada Reno Design Strategies for Evolutionary Robotics.
+  [NBR_V hop=2 tok=1058:1203]
+    Neighbor B4: Data Analyses Using Simulated Breeding and Inductive Learning Methods. Marketing decision making tasks require the acquisition of efficient decision rules from noisy questionnaire data. Unlike popular learni...
+  [NBR_V hop=2 tok=1203:1348]
+    Neighbor B5: HGA: A Hardware-Based Genetic Algorithm. A genetic algorithm (GA) is a robust problem-solving method based on natural selection. Hardware's speed advantage and its ability to parallelize offer great rewards ...
+  [NBR_V hop=2 tok=1348:1361]
+    Neighbor B6: A Survey of Evolution Strategies.
+  [NBR_V hop=2 tok=1361:1497]
+    Neighbor B7: An Evolutionary Approach to Vector Quantizer Design. Vector quantization is a lossy coding technique for encoding a set of vectors from different sources such as image and speech. The design of vector quanti...
+  [QUESTION hop=0 tok=1497:1511]
+    Do Paper A and Paper B cite each other? Answer: no
+
+  ANSWER (supervised, 1 token at pos 1510): ' no'
+
+==============================================================================
+  Dataset: ogbn-arxiv
+==============================================================================
+
+LP ogbn-arxiv (train) pos=984131 neg=984131
+
+------------------------------------------------------------------------------
+  ogbn-arxiv — sample 2 (label = yes, input_ids = 2634 tokens)
+------------------------------------------------------------------------------
+
+  [TARGET hop=0 tok=0:338]
+    Paper A: aspect aware latent factor model rating prediction with ratings and reviews. Although latent factor model (e.g., matrix factorization) achieves good accuracy in rating prediction, it suffers the problems includi...
+  [NBR_U hop=1 tok=338:439]
+    Neighbor A1: a capsule network for recommendation and explaining what you like and dislike. User reviews contain rich semantics towards the preference of users to features of items. Recently, many deep learning based sol...
+  [NBR_U hop=1 tok=439:540]
+    Neighbor A2: attentive aspect modeling for review aware recommendation. In recent years, many studies extract aspects from user reviews and integrate them with ratings for improving the recommendation performance. The co...
+  [NBR_U hop=1 tok=540:641]
+    Neighbor A3: transnets learning to transform for recommendation. Recently, deep learning methods have been shown to improve the performance of recommender systems over traditional methods, especially when review text is ...
+  [NBR_U hop=1 tok=641:742]
+    Neighbor A4: mmalfm explainable recommendation by leveraging reviews and images. Personalized rating prediction is an important research problem in recommender systems. Although the latent factor model (e.g., matrix fact...
+  [NBR_U hop=1 tok=742:843]
+    Neighbor A5: compositional coding for collaborative filtering. Efficiency is crucial to the online recommender systems. Representing users and items as binary vectors for Collaborative Filtering (CF) can achieve fast use...
+  [NBR_U hop=2 tok=843:944]
+    Neighbor A6: price aware recommendation with graph convolutional networks. In recent years, much research effort on recommendation has been devoted to mining user behaviors, i.e., collaborative filtering, along with the ...
+  [NBR_U hop=2 tok=944:1045]
+    Neighbor A7: structured neural topic models for reviews. We present Variational Aspect-based Latent Topic Allocation (VALTA), a family of autoencoding topic models that learn aspect-based representations of reviews. VALT...
+  [NBR_U hop=2 tok=1045:1146]
+    Neighbor A8: a review driven neural model for sequential recommendation. Writing review for a purchased item is a unique channel to express a user's opinion in E-Commerce. Recently, many deep learning based solutions hav...
+  [NBR_U hop=2 tok=1146:1247]
+    Neighbor A9: estimation action reflection towards deep interaction between conversational and recommender systems. Recommender systems are embracing conversational technologies to obtain user preferences dynamically, and...
+  [NBR_U hop=2 tok=1247:1348]
+    Neighbor A10: collaborative filtering with social local models. Matrix Factorization (MF) is a very popular method for recommendation systems. It assumes that the underneath rating matrix is low-rank. However, this assum...
+  [TARGET hop=0 tok=1348:1610]
+    Paper B: neural compatibility modeling with attentive knowledge distillation. Recently, the booming fashion sector and its huge potential benefits have attracted tremendous attention from many research communities. In pa...
+  [NBR_V hop=1 tok=1610:1711]
+    Neighbor B1: fast matrix factorization for online recommendation with implicit feedback. This paper contributes improvements on both the effectiveness and efficiency of Matrix Factorization (MF) methods for implicit feed...
+  [NBR_V hop=1 tok=1711:1812]
+    Neighbor B2: neural collaborative filtering. In recent years, deep neural networks have yielded immense success on speech recognition, computer vision and natural language processing. However, the exploration of deep neu...
+  [NBR_V hop=1 tok=1812:1913]
+    Neighbor B3: image based recommendations on styles and substitutes. Humans inevitably develop a sense of the relationships between objects, some of which are based on their appearance. Some pairs of objects might be seen...
+  [NBR_V hop=1 tok=1913:2014]
+    Neighbor B4: caffe convolutional architecture for fast feature embedding. Caffe provides multimedia scientists and practitioners with a clean and modifiable framework for state-of-the-art deep learning algorithms and a c...
+  [NBR_V hop=1 tok=2014:2115]
+    Neighbor B5: bpr bayesian personalized ranking from implicit feedback. Item recommendation is the task of predicting a personalized ranking on a set of items (e.g. websites, movies, products). In this paper, we investiga...
+  [NBR_V hop=2 tok=2115:2216]
+    Neighbor B6: consistency aware recommendation for user generated itemlist continuation. User-generated item lists are popular on many platforms. Examples include video-based playlists on YouTube, image-based lists (or"bo...
+  [NBR_V hop=2 tok=2216:2317]
+    Neighbor B7: towards open set deep networks. Deep networks have produced significant gains for various visual recognition problems, leading to high impact academic and commercial applications. Recent work in deep network...
+  [NBR_V hop=2 tok=2317:2418]
+    Neighbor B8: attributed social network embedding. Embedding network data into a low-dimensional vector space has shown promising performance for many real-world applications, such as node classification and entity retrie...
+  [NBR_V hop=2 tok=2418:2519]
+    Neighbor B9: dual deep network for visual tracking. Visual tracking addresses the problem of identifying and localizing an unknown target in a video given the target specified by a bounding box in the first frame. In thi...
+  [NBR_V hop=2 tok=2519:2620]
+    Neighbor B10: c ir cnn accelerating and compressing deep neural networks using block circulant weight matrices. Large-scale deep neural networks (DNNs) are both compute and memory intensive. As the size of DNNs continues...
+  [QUESTION hop=0 tok=2620:2634]
+    Do Paper A and Paper B cite each other? Answer: yes
+
+  ANSWER (supervised, 1 token at pos 2633): ' yes'
+
+------------------------------------------------------------------------------
+  ogbn-arxiv — sample 0 (label = no, input_ids = 1309 tokens)
+------------------------------------------------------------------------------
+
+  [TARGET hop=0 tok=0:124]
+    Paper A: gen slam generative modeling for monocular simultaneous localization and mapping. We present a Deep Learning based system for the twin tasks of localization and obstacle avoidance essential to any mobile robot. ...
+  [NBR_U hop=1 tok=124:225]
+    Neighbor A1: unsupervised image to image translation networks. Unsupervised image-to-image translation aims at learning a joint distribution of images in different domains by using images from the marginal distributions ...
+  [NBR_U hop=1 tok=225:326]
+    Neighbor A2: unpaired image to image translation using cycle consistent adversarial networks. Image-to-image translation is a class of vision and graphics problems where the goal is to learn the mapping between an input ...
+  [NBR_U hop=1 tok=326:427]
+    Neighbor A3: unsupervised learning of depth and ego motion from video. We present an unsupervised learning framework for the task of monocular depth and camera motion estimation from unstructured video sequences. We achi...
+  [NBR_U hop=1 tok=427:528]
+    Neighbor A4: a survey of simultaneous localization and mapping with an envision in 6g wireless networks. Simultaneous Localization and Mapping (SLAM) achieves the purpose of simultaneous positioning and map construction ...
+  [NBR_U hop=1 tok=528:629]
+    Neighbor A5: neural discrete representation learning. Learning useful representations without supervision remains a key challenge in machine learning. In this paper, we propose a simple yet powerful generative model that...
+  [NBR_U hop=2 tok=629:730]
+    Neighbor A6: near lossless l infinity constrained multi rate image decompression via deep neural network. Recently a number of CNN-based techniques were proposed to remove image compression artifacts. As in other restora...
+  [NBR_U hop=2 tok=730:831]
+    Neighbor A7: deep face recognition a survey. Driven by graphics processing units (GPUs), massive amounts of annotated data and more advanced algorithms, deep learning has recently taken the computer vision community by s...
+  [NBR_U hop=2 tok=831:932]
+    Neighbor A8: density estimation using real nvp. Unsupervised learning of probabilistic models is a central yet challenging problem in machine learning. Specifically, designing models with tractable learning, sampling, in...
+  [NBR_U hop=2 tok=932:1033]
+    Neighbor A9: estimating or propagating gradients through stochastic neurons for conditional computation. Stochastic neurons and hard non-linearities can be useful for a number of reasons in deep learning models, but in m...
+  [NBR_U hop=2 tok=1033:1134]
+    Neighbor A10: ls net learning to solve nonlinear least squares for monocular stereo. Sum-of-squares objective functions are very popular in computer vision algorithms. However, these objective functions are not always ea...
+  [TARGET hop=0 tok=1134:1295]
+    Paper B: a grammar based compressed representation of 3d trajectories. Much research has been published about trajectory management on the ground or at the sea, but compression or indexing of flight trajectories have usu...
+  [QUESTION hop=0 tok=1295:1309]
+    Do Paper A and Paper B cite each other? Answer: no
+
+  ANSWER (supervised, 1 token at pos 1308): ' no'
