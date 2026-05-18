@@ -1895,6 +1895,7 @@ def _build_lp_samples(
     max_hops: int,
     seed: int,
     mask_target_text: bool,
+    max_samples: int = 0,
 ) -> list[dict]:
     rng = random.Random(seed)
     samples: list[dict] = []
@@ -1903,6 +1904,8 @@ def _build_lp_samples(
     rng.shuffle(pairs)
 
     for (u, v), label in pairs:
+        if max_samples and len(samples) >= max_samples:
+            break
         if u not in node_data or v not in node_data:
             continue
         u_nb_ids, u_nb_hops, v_nb_ids, v_nb_hops = _sample_lp_neighbors(
@@ -1944,18 +1947,19 @@ def load_lp_dataset(
 ) -> Dataset:
     """Load a link-prediction dataset and return an HF Dataset of LP samples.
 
-    v1 supports ``cora`` only; the loader is keyed by name so we can extend to
-    pubmed/arxiv later by adding entries to the dispatch below.
+    Supports ``cora`` and ``ogbn-arxiv``.
     """
-    if dataset_name != "cora":
+    if dataset_name == "cora":
+        from dllm.data.datasets import cora_lp as lp_loader
+    elif dataset_name == "ogbn-arxiv":
+        from dllm.data.datasets import arxiv_lp as lp_loader
+    else:
         raise NotImplementedError(
-            f"LP loader v1 only supports 'cora', got {dataset_name!r}"
+            f"LP loader supports 'cora' and 'ogbn-arxiv'; got {dataset_name!r}"
         )
 
-    from dllm.data.datasets import cora_lp
-
-    config = DATASET_CONFIGS["cora"]
-    bundle = cora_lp.load(
+    config = DATASET_CONFIGS[dataset_name]
+    bundle = lp_loader.load(
         config, split=split, seed=seed, neg_ratio=neg_ratio
     )
 
@@ -1970,12 +1974,10 @@ def load_lp_dataset(
         max_hops=max_hops,
         seed=seed,
         mask_target_text=mask_target_text,
+        max_samples=max_samples,
     )
     for s in samples:
         s["dataset"] = dataset_name
-
-    if max_samples and max_samples > 0:
-        samples = samples[:max_samples]
 
     dataset = Dataset.from_list(samples)
     dataset.info.description = (
