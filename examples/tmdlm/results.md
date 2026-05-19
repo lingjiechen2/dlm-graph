@@ -275,7 +275,7 @@ JSONL: `/tmp/dlm-graph-eval-jsonl/eval-cora-boost-topo-mcdigit-cora_20260430_boo
 
 ### §9. single PubMed mc_digit nonb (run tag `pubmed_20260428_aligned`, **complete**)
 
-Single-dataset PubMed, `prompt_format=mc_digit`, `answer_label_style=digit0`, `max_answer_tokens=1`, `nb=10, hop=2`, no resampling. 4 ckpts saved per setting (370 / 740 / 1110 / 1480), all evaluated; checkpoint directories have since been deleted from disk so further training-step checkpoints are unrecoverable.
+Single-dataset PubMed, `prompt_format=mc_digit`, `answer_label_style=digit0`, `max_answer_tokens=1`, `nb=10, hop=2`, no resampling. 6 ckpts saved per setting (370 / 740 / 1110 / 1480 / 1850 / 2220; ckpt-2220 was captured mid-run before training was killed); checkpoint directories have since been deleted from disk so further training-step checkpoints are unrecoverable.
 
 #### Logit Eval
 
@@ -286,10 +286,30 @@ Single-dataset PubMed, `prompt_format=mc_digit`, `answer_label_style=digit0`, `m
 | 740      | 94.35         | 94.14       |
 | 1110     | 93.61         | 92.37       |
 | **1480** | **95.18** ⭐  | **94.47** ⭐ |
+| 1850     | 94.95         | 94.90       |
+| 2220     | 94.88         | 93.18       |
 
 
-Run **complete**. Best per setting: pubmed-notopo 95.18 @ ckpt-1480, pubmed-topo 94.47 @ ckpt-1480. Single-dataset PubMed-notopo 95.18 sits within 0.10 pt of the §7 merged-balanced 95.28 — joint training on Cora+PubMed therefore loses no PubMed accuracy. Both settings still beat the LLaGA-7B oracle-projector baseline (95.03 / —) on the notopo branch.
+Best per setting: pubmed-notopo 95.18 @ ckpt-1480, pubmed-topo 94.47 @ ckpt-1480. Late ckpts (1850 / 2220) regress slightly on logit — notopo peaks at ckpt-1480 and does not improve further, while topo drops 1.3 pt from ckpt-1480 → 2220.
 JSONL: `/tmp/dlm-graph-eval-jsonl/eval-pubmed-2hop-{notopo,topo}-pubmed_20260428_aligned.jsonl`
+
+#### Infill Eval (strict acc%, 10 steps)
+
+
+| ckpt     | pubmed-notopo | pubmed-topo |
+| -------- | ------------- | ----------- |
+| 370      | 93.13         | 92.98       |
+| 740      | 94.93         | 93.36       |
+| 1110     | 94.93         | 94.27       |
+| 1480     | 94.90         | 94.14       |
+| 1850     | 95.51         | 95.51       |
+| **2220** | **95.64** ⭐  | **95.59** ⭐ |
+
+
+Best per setting: pubmed-notopo infill **95.64 @ ckpt-2220**, pubmed-topo infill **95.59 @ ckpt-2220**. Infill decode recovers more accuracy than logit at late ckpts: notopo infill 95.64 vs. logit 95.18 at their respective peaks (+0.46 pt). Both infill peaks exceed the LLaGA-7B oracle-projector NC baseline of 95.03. The infill ↔ logit gap widens in the late-training regime (ckpts 1850–2220), consistent with the iterative denoising decoder recovering class signal that the single-step logit scorer misses once probability mass is spread across similar class tokens.
+JSONL: `/tmp/dlm-graph-eval-jsonl/eval-pubmed-2hop-{notopo,topo}-pubmed_20260428_aligned-infill.jsonl`
+
+Run **complete**. Single-dataset PubMed-notopo 95.18 (logit) / 95.64 (infill) sit within 0.10 pt and above of the §7 merged-balanced logit peak (95.28) — joint training on Cora+PubMed therefore loses no PubMed accuracy.
 
 ### §11. cora mc_digit nonb at `max_seq_len=4096` (run tag `cora_20260501_mcdigit_nonb_seq4k`, **in progress**)
 
@@ -651,4 +671,60 @@ vs. baselines:
 - §21 best = 75.03% → **+1.36 pt** from capped→full training.
 
 Key observations. (i) Full training (§22/§23) is the dominant lever: removing the 22%-cap gives +1.98 pt at 1 epoch and +2.21 pt at 3 epochs over §21. (ii) 3 epochs yields only +0.23 pt over 1 epoch — training is effectively converged by epoch 2. (iii) A double dip appears at epochs 0.9 and 1.5 (raw ≈74.9 both times) amid neighboring checkpoints at 75.3–76.0; this is a reproducible LR-scheduler × data-reshuffle artifact confirmed by both N=5000 and full-test measurements. (iv) N=5000 estimates carry a 0.4–0.85 pt bias relative to full test for individual checkpoints, making full-test eval necessary for reliably ranking close checkpoints.
+
+---
+
+### §24. ogbn-products NC SFT mc_digit nonb (run tag `products_20260503_mcdigit_nonb_seq2k`, **partial eval**)
+
+Single-dataset ogbn-products, `prompt_format=mc_digit`, `answer_label_style=digit0`, `max_answer_tokens=2` (47 classes requires 2-digit answer), `nb=10, hop=2`, `topo`, `max_seq_len=2048`, `include_neighbor_labels=False`. 5 ckpts evaluated from a ~540-step run. Frozen-base logit baseline: 23.44% (topo). Note from §17: 74.4% of training nodes are isolated (zero in-subset neighbors), so the topo mask has no effect for the majority of samples.
+
+#### Logit Eval (products test, n=300 stratified subsample, `batch_size=8`)
+
+
+| ckpt    | products-topo |
+| ------- | ------------- |
+| 231     | 57.07         |
+| 308     | 55.00         |
+| **385** | **58.50** ⭐  |
+| 462     | 58.00         |
+| 539     | 56.67         |
+
+
+Best: ckpt-385 = **58.50%** — +35 pt above the frozen-base zero-shot baseline (23.44%). Accuracy oscillates in 55–58.5% range past ckpt-231, suggesting early convergence or a plateau. The Patio, Lawn & Garden class remains at 0% across all checkpoints (only ~10 test samples; the TAPE products subset severely under-represents it). LLaGA NC numbers for ogbn-products are not available for direct comparison.
+JSONL: `/tmp/dlm-graph-eval-jsonl/eval-products-seq2k-topo-mcdigit-products_20260503-bs8-logit.jsonl`
+
+---
+
+### §25. Cora Link Prediction SFT (run tag `cora_lp_20260519_seq4k_5ep_3gpu`, **complete**)
+
+First LP fine-tuning run. Setup: LLaDA-8B-Instruct + LoRA r=64/α=64 all-linear, `task=lp`, `lp_neg_ratio=1`, `mc_digit + digit0`, `max_seq_len=4096`, `hop=2`, `nb=10`, `topo=True`, `nonb`, 5 epochs = 1870 steps, `per_device_train_batch=2`, `grad_accum=8`, effective batch 48 on 3 GPUs (6 h wall, 2026-05-19). Evaluated on LLaGA's exact test node-pairs (`edge_sampled_2_10_only_test.jsonl`, n=680) using `eval_lp_llaga_split.py` with `processed_data_link_notest.pt` as adjacency (no test edges leaked).
+
+#### Accuracy + AUC (LLaGA test split, n=680)
+
+
+| ckpt     | acc (%)      | AUC          | yes acc (%) | no acc (%) |
+| -------- | ------------ | ------------ | ----------- | ---------- |
+| 187      | 85.44        | 0.9634       | 71.43       | 96.57      |
+| 374      | 89.85        | 0.9640       | 82.06       | 96.04      |
+| 561      | 88.68        | 0.9644       | 77.41       | 97.63      |
+| **748**  | **91.47** ⭐ | 0.9643       | **88.70**   | 93.67      |
+| 935      | 89.71        | 0.9653       | 82.72       | 95.25      |
+| 1122     | 90.44        | **0.9657** ⭐ | 87.04       | 93.14      |
+| 1309     | 89.71        | 0.9674       | 81.73       | 96.04      |
+| 1496     | 90.29        | 0.9654       | 85.38       | 94.20      |
+| 1683     | 89.41        | 0.9661       | 81.40       | 95.78      |
+| 1870     | 89.12        | 0.9655       | 80.73       | 95.78      |
+| final    | 89.12        | 0.9655       | 80.73       | 95.78      |
+
+
+Run **complete**. Best accuracy: ckpt-748 = **91.47%** / AUC = 0.9643. Best AUC: ckpt-1309 = 0.9674 (accuracy 89.71%). The accuracy peak at ckpt-748 (~2 epochs) is followed by a mild regression to 89–90% at later checkpoints, consistent with over-fitting to the edge-label balance rather than genuine signal degradation — AUC continues to improve (0.9634 → 0.9674) even as argmax accuracy falls, meaning the rank ordering of predictions improves while the decision boundary shifts.
+
+vs. LLaGA baselines (same Cora LP split from LLaGA Table 1):
+- LLaGA-ND-7B: 92.71% → **−1.24 pt**
+- LLaGA-HO-7B: 92.65% → **−1.18 pt**
+- Base LLaDA-8B-Instruct zero-shot (§0): 52.18% → **+39.29 pt** from SFT
+
+The gap to LLaGA (~1.2 pt) is the primary open target for LP. Unlike NC where we match or beat LLaGA on Cora and PubMed, LP accuracy is bounded below the LLaGA oracle projector here. See the optimization section for candidate improvements.
+
+JSONL: `.models/eval_logs/eval_cora_lp_llaga_cora_lp_20260519_seq4k_5ep_gpu246_gpu{2,4,6}.jsonl`
 
