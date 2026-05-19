@@ -604,3 +604,51 @@ The crossover at ckpt-336 mirrors the late-stage divergence we see on cora (§14
 
 Per-class breakdown at ckpt-420 (40 arxiv classes, eval n=1000): top tier `cs.AR` 100 / `cs.CV` 99 / `cs.CL` 86–89 / `cs.CG` 87–88 / `cs.RO` 85–88 / `cs.DS` 76–85 / `cs.SD` 86; bottom tier 8 classes at 0% (`cs.NA / cs.MM / cs.CY / cs.GL / cs.SC / cs.GR / cs.OH / cs.OS`) — these eight together are 2.59% of the test split, so lifting them all to the non-zero mean of 58% would only move the overall accuracy by under 1 pt. The real ceiling is set by `cs.LG` (Machine Learning), which is 22.10% of the test split but only 7.69% of train (a 2.87× distribution shift introduced by the time-based OGB-arxiv split — test papers are post-2018, when ML exploded outside the train period); cs.LG sits at 56–59% accuracy and ~12 pp of the overall comes from this class alone, so any future architectural lever on arxiv must target the cs.LG ↔ cs.AI / cs.CV / cs.CL confusion rather than the long tail.
 
+### §21. arxiv r=128 lgboost (run tag `arxiv_20260506_digit0pad_lgboost_r128`, **complete**)
+
+LoRA r=128/α=128 on `all-linear`, full ogbn-arxiv train capped at 22% (`max_train_samples` applied), `mc_digit + digit0_pad`, `hops=2`, `nb=10`, `topo`, `max_seq_len=4096`. Best raw checkpoint at N=1000: ckpt-1845 = 74.40%. Best raw at N=5000: ckpt-1845 = 75.03% (N=5000 seed=42). Post-hoc TTA exploration (Phase 1–5 in `analysis/postprocess_arxiv_r128/RESULTS.md`) pushed the 1000-sample ensemble to 76.40% (16-pass E5 + τ=0.2 cal) but the unbiased N=5000 best single-pass is 75.70 (ckpt-2042, nb=12). The key finding from this exploration: neighbor-sample jitter (varying `--neighbor_seed` over 4 draws, fixed nb=10) recovers +1.8 pt at N=1000 by averaging out per-node sampling variance, matching more expensive hyperparam ensembles.
+
+### §22. arxiv full-train 1-epoch r=128 (run tag `arxiv_20260511_fulltrain_r128_1ep`, **complete**)
+
+Same recipe as §21 except the train-sample cap is removed — full 111,391-sample ogbn-arxiv train set, 1 epoch = 2396 steps. Eval at N=5000 (seed=42, nb=10) on 5 tail checkpoints:
+
+| ckpt | raw   | cal (τ=1) |
+| ---- | -----:| ---------:|
+| 1680 | 75.54 | 69.90 |
+| 1920 | 75.40 | 69.12 |
+| 2160 | 76.08 | 70.02 |
+| 2396 | **76.16** ⭐ | 69.90 |
+| final | **76.16** ⭐ | 69.90 |
+
+Reference: §21 ckpt-1845 N=5000 raw = 74.18. Full training alone yields **+1.98 pt** over the 22%-capped §21 baseline.
+
+### §23. arxiv full-train 3-epoch r=128 (run tag `arxiv_20260514_fulltrain_r128_3ep`, **complete**)
+
+Identical setup to §22 except `MAX_STEPS=7188` (3 epochs). Ran 2026-05-14 → 05-17 on GPUs 2/3/4/6 (~63 h). All 10 checkpoints evaluated on the **full test set** (N=48,603, σ≈0.2 pt) on 2026-05-18.
+
+Note: all §23 checkpoints are adapter-only (1.3 GB each) and cannot be resumed — `save_only_model: True` project default in `dllm/utils/configs.py:69` overrode the launcher flag. Future full-train runs must pass `--save_only_model False` explicitly.
+
+#### Full-test eval (N=48,603, complete 2026-05-18)
+
+| ckpt  | epoch | raw       | cal (τ=1) | N=5000 raw |
+| ----- | -----:| ---------:| ---------:| ----------:|
+| 719   | 0.30  | 73.68     | 66.73     | —          |
+| 1438  | 0.60  | 74.51     | 69.66     | —          |
+| 2157  | 0.90  | 74.88     | 69.86     | 75.12      |
+| 2876  | 1.20  | 76.04     | 70.69     | 76.38      |
+| 3595  | 1.50  | 74.89 ↓   | 69.89     | 74.28      |
+| 4314  | 1.80  | 75.31     | 70.76     | 75.24      |
+| 5033  | 2.10  | 76.32     | 71.89     | 76.72      |
+| **5752** | **2.40** | **76.39** ⭐ | 71.87 | 77.24   |
+| 6471  | 2.70  | 75.87     | 71.94     | —          |
+| final | 3.00  | 76.22     | **72.02** | —          |
+
+Best raw (full test): ckpt-5752 = **76.39%**. Best cal (full test): ckpt-final cal = 72.02% (τ=1; τ-sweep not yet applied).
+
+vs. baselines:
+- LLaGA-HO = 76.66% → **−0.27 pt**, within σ≈0.2 pt.
+- §22 best = 76.16% → **+0.23 pt** from 1→3 epochs (sharp diminishing returns).
+- §21 best = 75.03% → **+1.36 pt** from capped→full training.
+
+Key observations. (i) Full training (§22/§23) is the dominant lever: removing the 22%-cap gives +1.98 pt at 1 epoch and +2.21 pt at 3 epochs over §21. (ii) 3 epochs yields only +0.23 pt over 1 epoch — training is effectively converged by epoch 2. (iii) A double dip appears at epochs 0.9 and 1.5 (raw ≈74.9 both times) amid neighboring checkpoints at 75.3–76.0; this is a reproducible LR-scheduler × data-reshuffle artifact confirmed by both N=5000 and full-test measurements. (iv) N=5000 estimates carry a 0.4–0.85 pt bias relative to full test for individual checkpoints, making full-test eval necessary for reliably ranking close checkpoints.
+

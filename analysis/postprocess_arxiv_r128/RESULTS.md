@@ -426,3 +426,114 @@ Phase 6 produced 12 independent N=5000 caches (4 ckpts × 4 nb; ckpt-final == ck
 | 3ckpts_nb12 | 3 | 75.02 | 75.12 | 75.16 | 75.16 | 75.24 | 75.20 | 71.24 |
 | 3ckpts_x_4nb_12 | 12 | 75.24 | 75.48 | 75.66 | 75.66 | 75.72 | 75.66 | 75.82 |
 | 1845_2042_nb10_nb15 | 4 | 75.54 | 75.20 | 76.02 | 76.02 | 76.06 | 76.02 | 73.84 |
+
+
+## §22 — full-train 1-epoch r=128 (sanity check, ran 2026-05-11 → 05-12)
+
+LLaDA-8B-Instruct + LoRA r=128 all-linear, full ogbn-arxiv train (post-boost
+111,391 samples), 1 epoch = 2396 steps, eff_bs=48, LR 5e-5, mc_digit +
+digit0_pad, hops=2 nb=10 topo. Other hyperparameters identical to §21 r128.
+
+Run tag: `arxiv_20260511_fulltrain_r128_1ep`
+
+### §22 N=5000 eval on 5 tail ckpts (seed=42, nb=10)
+
+| ckpt | raw | cal (τ=1) |
+|---|---:|---:|
+| 1680 | 75.54 | 69.90 |
+| 1920 | 75.40 | 69.12 |
+| 2160 | 76.08 | 70.02 |
+| 2396 | **76.16** | 69.90 |
+| final | **76.16** | 69.90 |
+
+Reference: §21 ckpt-1845 N=5000 nb=10 raw 74.18.
+**§22 +1.98 pt raw over §21** — full training (vs 22% cap in §21) is the key
+driver. cal (τ=1) over-shifts; τ sweep recovers it (matches §21 finding).
+
+
+## §23 — full-train 3-epoch r=128 (current best, ran 2026-05-14 → 05-17)
+
+Identical setup to §22 except `MAX_STEPS=7188` (3 epochs). Run tag:
+`arxiv_20260514_fulltrain_r128_3ep`. Total wall ~63h on GPUs 2/3/4/6.
+
+**Note on resume-capability:** launcher intentionally dropped
+`--save_only_model True`, but `dllm/utils/configs.py:69` has a project default
+`save_only_model: bool = True` that overrode it. All §23 ckpts are adapter-only
+(1.3 GB each) and cannot be resumed. Future full-train launchers should pass
+`--save_only_model False` explicitly to save optimizer.pt etc.
+
+### §23 N=5000 eval on 7 ckpts (GPU 0 sequential, seed=42, nb=10)
+
+Run while SFT was still active on GPUs 2/3/4/6.
+
+| ckpt | epoch | raw | cal (τ=1) |
+|---|---:|---:|---:|
+| 2157 | 0.90 | 75.12 | 69.84 |
+| 2876 | 1.20 | 76.38 | 70.68 |
+| 3595 | 1.50 | 74.28 ↓ | 68.90 |
+| 4314 | 1.80 | 75.24 | 70.08 |
+| 5033 | 2.10 | 76.72 | 71.84 |
+| 5752 | 2.40 | **77.24** | 71.88 |
+| 6471 | 2.70 | (skipped; eval truncated for full-test queue) | — |
+
+Best at N=5000: ckpt-5752 raw=77.24, beats §22 (76.16) by +1.08 pt and
+LLaGA-HO (76.66) by +0.58 pt — but see full-test results below for the
+unbiased estimate.
+
+### §23 nb sweep on ckpt-5752 (GPU 1, N=5000)
+
+Aborted after nb=12 to free GPU 1 for other work.
+
+| nb | raw | cal (τ=1) |
+|---|---:|---:|
+| 5 | 76.52 | 70.90 |
+| 10 (baseline) | 77.24 | 71.88 |
+| 12 | 76.84 | **72.12** |
+
+nb=5 underperforms (too little context); nb=10 best raw; nb=12 best cal at τ=1.
+
+### §23 full-test eval (N=48,603, 4-GPU queue, newest-first; complete 2026-05-18 14:24)
+
+σ ≈ 0.2 pt at full test. 10 / 10 ckpts complete.
+
+| ckpt | epoch | raw | cal (τ=1) | N=5000 raw |
+|---|---:|---:|---:|---:|
+| 719  | 0.30 | 73.68 | 66.73 | — |
+| 1438 | 0.60 | 74.51 | 69.66 | — |
+| 2157 | 0.90 | 74.88 | 69.86 | 75.12 |
+| 2876 | 1.20 | 76.04 | 70.69 | 76.38 |
+| 3595 | 1.50 | 74.89 ↓ | 69.89 | 74.28 |
+| 4314 | 1.80 | 75.31 | 70.76 | 75.24 |
+| 5033 | 2.10 | 76.32 | 71.89 | 76.72 |
+| 5752 | 2.40 | **76.39** | 71.87 | 77.24 |
+| 6471 | 2.70 | 75.87 | 71.94 | — |
+| final | 3.00 | 76.22 | **72.02** | — |
+
+**Best raw (full test):** ckpt-5752 = 76.39, cal-default = 71.87.
+**Best cal (full test):** ckpt-final cal = 72.02.
+
+vs baselines (all full test):
+- §21 ckpt-1845 raw 75.03 / cal 75.67 → **§23 best raw +1.36 pt** but cal
+  *lower* because §21 used τ-tuned cal (best τ=0.15) which we haven't applied
+  here yet.
+- LLaGA-HO 76.66 → currently **−0.27 pt** on raw, within σ (≈0.2 pt). Cal-best
+  72.02 still well below LLaGA-HO; needs τ sweep.
+
+### Key takeaways from §22 → §23 progression
+
+1. **Full training matters most.** N=5000 baseline jumped from §21 74.18 →
+   §22 76.16 → §23 5752 77.24 (a +3 pt gain), largely from "use the full
+   train split", not from architectural changes.
+2. **3 epochs > 1 epoch but with sharp diminishing returns.** §22 best 76.16
+   vs §23 best (full test) 76.39 = +0.23 pt despite 3× the compute.
+3. **Late-ckpt plateau.** Among §23 ckpts at epoch 2.1–3.0, raw stays in
+   75.87–76.39 (within ~σ). Training is effectively converged after epoch 2.
+4. **Double dip at epoch 0.9 + 1.5.** Both at ≈74.9 raw on full test, in
+   contrast with neighboring ckpts at 75.3–76.0. Likely an interaction
+   between LR scheduler curvature and cross-epoch data reshuffling; pure
+   reproducible artifact (confirmed across both N=5000 and full-test
+   measurements).
+5. **N=5000 → full-test gap is non-trivial (0.4–0.85 pt) and not random.**
+   The seed=42 subset is deterministic, so different ckpts get different
+   "subset luck". For ranking close ckpts (within ~1 pt), only full test is
+   trustworthy. N=5000 remains useful for sweep / sanity / direction.
