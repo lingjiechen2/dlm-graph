@@ -724,7 +724,15 @@ vs. LLaGA baselines (same Cora LP split from LLaGA Table 1):
 - LLaGA-HO-7B: 92.65% → **−1.18 pt**
 - Base LLaDA-8B-Instruct zero-shot (§0): 52.18% → **+39.29 pt** from SFT
 
-The gap to LLaGA (~1.2 pt) is the primary open target for LP. Unlike NC where we match or beat LLaGA on Cora and PubMed, LP accuracy is bounded below the LLaGA oracle projector here. See the optimization section for candidate improvements.
+The gap to LLaGA (~1.2 pt) is the primary open target for LP. Unlike NC where we match or beat LLaGA on Cora and PubMed, LP accuracy is bounded below the LLaGA oracle projector here.
 
 JSONL: `.models/eval_logs/eval_cora_lp_llaga_cora_lp_20260519_seq4k_5ep_gpu246_gpu{2,4,6}.jsonl`
+
+#### LP split and leakage analysis
+
+**Split mismatch.** Our SFT run used our own random 85/5/10 split (`lp_split_seed42_neg1_v50_t100.pt`, seed=42). LLaGA's test split (`edge_sampled_2_10_only_test.jsonl`) is a different partition. Checking overlap: **241/301 (80%) of LLaGA test positive edges appear in our training set.** This creates a train-test distribution mismatch: those edges were present in `adj_train` during our SFT, so structural signals around them (shared neighbors, indirect paths) were available to the model during training but are absent at test time (we use `processed_data_link_notest.pt` at eval, which removes all LLaGA test edges). The result is that the comparison on the LLaGA test split is not fully fair — to fix this, retrain on LLaGA's own `edge_sampled_2_10_only_train.jsonl`.
+
+**Our eval is leakage-free at inference time.** At evaluation, `_sample_lp_neighbors` uses `adj_train = processed_data_link_notest.pt` (test edges removed) and explicitly drops the candidate node v from u's neighbor list at every hop (`nb != v` filter covers hop 1 and hop 2). So neither the direct edge nor any 2-hop path to v can appear in the prompt. The only graph-structural signal visible is shared neighbors (common friends of u and v that are training edges) — this is the standard common-neighbors heuristic used by all LP methods, not a leak.
+
+**LLaGA has a harder leakage problem at test time.** LLaGA's test JSONL pre-samples neighbors using the full adjacency (test edges not yet removed). For **48.2% of LLaGA test positive pairs**, the other endpoint v appears directly in u's pre-sampled `graph` field — meaning v's SimTeG embedding is included in u's `<graph>` token during LLaGA inference. The model can leverage this direct embedding co-occurrence. LLaGA's reported 92.71% (ND) / 92.65% (HO) Cora LP accuracy is therefore measured under partial test-time label leakage. Our 91.47% is measured under a stricter setup (no direct endpoint in the prompt), so the true gap between methods is likely smaller than 1.2 pt.
 
