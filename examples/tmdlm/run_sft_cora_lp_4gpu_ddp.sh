@@ -24,6 +24,7 @@ MAX_HOPS=2
 MAX_NEIGHBORS_PER_HOP=10
 LP_NEG_RATIO=1
 USE_TOPOLOGY_MASK="${USE_TOPOLOGY_MASK:-True}"
+LP_POS_WEIGHT="${LP_POS_WEIGHT:-1.0}"
 POSITION_ID_TYPE=sequential
 
 BASE_MODEL="GSAI-ML/LLaDA-8B-Instruct"
@@ -124,4 +125,5 @@ CUDA_VISIBLE_DEVICES="${GPUS}" "${PYTHON_BIN}" -m torch.distributed.run \
     --r "${LORA_R}" \
     --lora_alpha "${LORA_ALPHA}" \
     --target_modules "${LORA_TARGET_MODULES}" \
+    --lp_pos_weight "${LP_POS_WEIGHT}" \
     >"${log_file}" 2>&1

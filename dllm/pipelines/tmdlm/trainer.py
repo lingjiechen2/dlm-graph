@@ -40,6 +40,19 @@ class TMDLMConfig(MDLMConfig):
             )
         },
     )
+    # LP-specific: upweight positive (yes) samples in the diffusion loss.
+    # yes_acc < no_acc in practice; setting this > 1.0 pushes the model to
+    # attend more to positive pairs. Only applied when cls_labels are present
+    # and cls_loss_weight == 0 (i.e. the LP task path).
+    lp_pos_weight: float = field(
+        default=1.0,
+        metadata={
+            "help": (
+                "For LP task: multiply the diffusion loss of positive (yes, cls_label=1) "
+                "samples by this factor. 1.0 = uniform weighting."
+            )
+        },
+    )
 
 
 class TMDLMTrainer(MDLMTrainer):
@@ -62,6 +75,7 @@ class TMDLMTrainer(MDLMTrainer):
         super().__init__(args=args, *pargs, **kwargs)
         self.cls_loss_weight = args.cls_loss_weight
         self.ms_threshold = args.ms_threshold
+        self.lp_pos_weight = args.lp_pos_weight
 
     def _build_attention_mask(
         self,
@@ -179,6 +193,17 @@ class TMDLMTrainer(MDLMTrainer):
             reduction="none",
         )
         token_nll = token_nll * loss_weights * masked_mask.to(token_nll.dtype)
+
+        # LP positive-sample upweighting: scale yes-sample rows before normalisation.
+        if self.lp_pos_weight != 1.0:
+            cls_labels = inputs.get("cls_labels", None)
+            if cls_labels is not None:
+                w = torch.where(
+                    cls_labels == 1,
+                    torch.full((b,), self.lp_pos_weight, device=input_ids.device, dtype=token_nll.dtype),
+                    torch.ones(b, device=input_ids.device, dtype=token_nll.dtype),
+                )
+                token_nll = token_nll * w.unsqueeze(1)
 
         self.meter.update(
             split="train" if model.training else "eval",

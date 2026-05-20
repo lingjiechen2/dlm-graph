@@ -1,4 +1,4 @@
-# DLM-Graph: Node Classification Results
+# DLM-Graph: Experiment Results (NC + LP)
 
 All results below are **post the prompt/option-block label-leakage fix** in
 `dllm/data/graph.py` (2026-04-29). All training runs use
@@ -311,11 +311,11 @@ JSONL: `/tmp/dlm-graph-eval-jsonl/eval-pubmed-2hop-{notopo,topo}-pubmed_20260428
 
 Run **complete**. Single-dataset PubMed-notopo 95.18 (logit) / 95.64 (infill) sit within 0.10 pt and above of the §7 merged-balanced logit peak (95.28) — joint training on Cora+PubMed therefore loses no PubMed accuracy.
 
-### §11. cora mc_digit nonb at `max_seq_len=4096` (run tag `cora_20260501_mcdigit_nonb_seq4k`, **in progress**)
+### §11. cora mc_digit nonb at `max_seq_len=4096` (run tag `cora_20260501_mcdigit_nonb_seq4k`, **complete**)
 
 Single-dataset cora, `mc_digit + nonb`, `max_hops=2`, `max_neighbors_per_hop=10`, identical recipe to §1 except **`max_seq_len` raised from 2048 → 4096**. Motivation: at seq=2048 each neighbor was hard-truncated to ~66 tokens (cora abstract median ~200), losing most neighbor content. At seq=4096 the per-neighbor budget rises to ~170 tokens so most neighbor abstracts fit without token-level truncation. Per-device batch reduced from 6 → 3 with grad_accum 8 → 16 to keep the effective batch at 48 within 80GB. 340 total steps (10 epochs); save / eval every 17 steps (`save_steps=eval_steps=0.05`).
 
-#### Logit Eval (cora test, 542 samples; in progress, training currently at step ~170/340)
+#### Logit Eval (cora test, 542 samples; all 20 ckpts complete)
 
 
 | ckpt    | cora-notopo  | cora-topo    |
@@ -391,38 +391,6 @@ Sanity check on the §7 reported numbers: re-evaluate the two best-per-dataset �
 cora-topo @ ckpt-816 shows a 2.77 pt val-test gap (val 88.19 < test 90.96), suggesting some test-set selection bias when picking ckpt-816 by test-set best. pubmed-topo @ ckpt-510 is essentially identical on val and test (94.90 vs 94.93), so this checkpoint is a clean optimum on the merged-bal val set. Per-class pubmed val: Experimental 92.9 % / Type 1 95.8 % / Type 2 95.0 %.
 JSONL: `/tmp/dlm-graph-eval-jsonl/eval-sec7-val-{cora,pubmed}-topo-mcdigit.jsonl`
 
----
-
-## Summary
-
-### Single-dataset training
-
-Single-dataset runs on Cora (§1, §8) and PubMed (§9). All use `mc_digit + nonb` with the same LoRA recipe; §8 additionally up-weights the two hardest classes via `--resample_strategy boost`. Earlier `nbmask` runs (which inject neighbor class labels into the prompt) are excluded from this comparison since they are not a fair `nonb` baseline.
-
-
-| §   | Run                                                   | Setting | Best ckpt | Logit     | Infill strict | Test set |
-| --- | ----------------------------------------------------- | ------- | --------- | --------- | ------------- | -------- |
-| §1  | cora mc_digit nonb                                    | notopo  | 338 / 260 | **90.77** | **90.96**     | Cora     |
-| §1  | cora mc_digit nonb                                    | topo    | 312       | 90.04     | 89.85         | Cora     |
-| §8  | cora mc_digit nonb + boost (Theory:2, RuleLearning:3) | topo    | 320       | **90.59** | —             | Cora     |
-| §9  | pubmed mc_digit nonb                                  | notopo  | 1480      | **95.18** | —             | PubMed   |
-| §9  | pubmed mc_digit nonb                                  | topo    | 1480      | 94.47     | —             | PubMed   |
-
-
-Take-aways. (i) Cora-notopo saturates around 90.8 logit / 91.0 infill at ckpt-260–338; longer training (up to 510) gives no further gain. (ii) Logit and infill-strict accuracies track within ≤0.4 pt across all checkpoints, so the masked-diffusion 10-step infill recovers essentially the same answer as direct token scoring. (iii) Increasing neighbor count (15/20/25) or hops (3) yields no meaningful gain over the default `nb=10, hop=2`. (iv) The §8 boost recipe lifts Cora-topo by +0.55 pt over §1 single-cora topo (90.59 vs 90.04) and accelerates per-class learning on Theory and Rule Learning early in training, validating the up-weighting strategy without hurting other classes. (v) Single-dataset PubMed (§9 mc_digit) reaches 95.18 notopo / 94.47 topo, within 0.10 pt of the §7 merged-balanced run (95.28 / 94.93) — joint Cora+PubMed training therefore loses no PubMed accuracy.
-
-### Multi-dataset training (cora + pubmed)
-
-
-| §   | Run                                  | Status   | Setting | Best ckpt | Cora logit | PubMed logit |
-| --- | ------------------------------------ | -------- | ------- | --------- | ---------- | ------------ |
-| §6  | cora+pubmed merged catinfill nonb    | killed   | notopo  | 422       | 63.84      | 77.36        |
-| §6  | cora+pubmed merged catinfill nonb    | killed   | topo    | 633       | 70.30      | 77.56        |
-| §7  | cora+pubmed merged-bal mc_digit nonb | complete | notopo  | 765 / 612 | **90.77**  | **95.28**    |
-| §7  | cora+pubmed merged-bal mc_digit nonb | complete | topo    | 816 / 510 | **90.96**  | **94.93**    |
-
-
-Take-aways. (i) The naive merge in §6 (`category_infill`, `max_answer_tokens=10`, no resampling) produces class collapse on Cora — Cora-notopo accuracy degrades from 63.84 at ckpt-422 to 39.85 at ckpt-1055, while PubMed plateaus at ~77.5 because the unconstrained `[Diab]…` answer prefix lets PubMed dominate the loss. The topo mask delays but does not prevent the collapse. (ii) Switching to `mc_digit` (single-digit answer, `max_answer_tokens=1`, `cls_loss_weight=1.0`) plus `--resample_strategy balance_datasets` (each dataset down-sampled to 1624 examples) eliminates the collapse: §7 matches or exceeds the §1 single-dataset Cora baselines on both settings (Cora-notopo ties at 90.77, Cora-topo improves +0.92 pt to 90.96) while reaching 95.28 on PubMed-notopo, surpassing the LLaGA-7B oracle-projector baseline (95.03). (iii) Both PubMed settings show a transient ckpt-459 dip (notopo 91.78, topo 90.09) followed by recovery — likely an lr-scheduler artifact, not a regression. (iv) Conclusion: a single-token answer space plus dataset-balanced resampling is sufficient to train one LoRA on Cora+PubMed jointly without sacrificing per-dataset accuracy on either.
 ### §13. pubmed mc_digit nonb at `max_seq_len=4096` (run tag `pubmed_20260502_mcdigit_nonb_seq4k`, **complete**)
 
 Single-dataset PubMed, `mc_digit + nonb`, `max_hops=2`, `max_neighbors_per_hop=10`. Same per-device batch / grad-accum recipe as §11 (`max_seq_len=4096`, `per_device_train_batch=3`, `grad_accum=16`, effective batch 48, 10 epochs, ~1972 total steps; `save_steps=eval_steps=0.05`, `cls_loss_weight=0.0`). Motivation: pubmed abstracts are typically longer than cora — at seq=2048 each neighbor was budget-bound to ~144 tokens, truncating most. seq=4096 raises the per-neighbor budget to ~306 tokens, removing token-level truncation for nearly all neighbors.
@@ -552,7 +520,7 @@ This section consolidates the three concrete findings from §13 / §14 / §16 ab
 
 | seq | run tag                                       | notopo peak                  | topo peak                    | gap (topo − notopo) |
 | --- | --------------------------------------------- | ---------------------------- | ---------------------------- | ------------------- |
-| 2k  | `pubmed_20260428_aligned` (§9)                | 95.30 @ 656                  | 94.59 @ 656                  | **−0.71**           |
+| 2k  | `pubmed_20260428_aligned` (§9)                | 95.18 @ 1480                 | 94.47 @ 1480                 | **−0.71**           |
 | 4k  | `pubmed_20260502_mcdigit_nonb_seq4k` (§13)    | 95.70 @ 992                  | **96.30** @ 744              | **+0.60**           |
 
 A 1.31-point swing (−0.71 → +0.60) in favor of topology-mask is the clearest evidence we have that the dense baseline's edge at seq=2k is a *truncation* artefact rather than a fundamental limit of the topo block-mask: with 2× the context, every neighbor abstract fits and the topo run reaches a new global topo peak (96.30 ⭐, the highest topo accuracy across every pubmed setting we have run). Strength: ⭐⭐⭐⭐ (peak-to-peak across 20 ckpts × 2 conditions on the full pubmed test set, n=1000 cap).
@@ -604,7 +572,7 @@ Three observations. First, **both peaks land at ckpt-124** (the earliest checkpo
 
 Combined with §11 (cora → pubmed, also notopo > topo across the cross-eval grid), this gives **two-direction confirmation that dense attention is more cross-domain robust than the topology-mask block-diagonal pattern**, even when the in-domain comparison favors topo.
 
-### §20. arxiv seq=4k mc_digit nonb (run tag `arxiv_20260503_mcdigit_nonb_seq4k`, **in progress — first 25% snapshot only**)
+### §20. arxiv seq=4k mc_digit nonb (run tag `arxiv_20260503_mcdigit_nonb_seq4k`, **superseded — early snapshot only**)
 
 First arxiv run on the seq=4k + mc_digit + nonb pipeline, replacing the older §-pre-29 catinfill run. Settings match §13 / §14: `max_seq_len=4096`, `max_neighbors_per_hop=10`, `max_hops=2`, `mc_digit + digit0`, `max_answer_tokens=2` (40-class arxiv needs 2 digits "00".."39"), `include_neighbor_labels=False`, `max_train_samples=20000`, `max_steps=1668` (4 epoch over 20k samples at effective batch 48), LoRA r=64/α=64 on `all-linear`. Initial single-GPU training was killed at step 420 (25%) after the periodic HF-trainer eval (eval_steps=0.1, eval set ≈ 14900 batches × 1.6 s/it ≈ 6.6 h per single eval) stalled the run; relaunched as 4-GPU DDP with `eval_strategy=no` and on-disk TAG-cache (commit `a92dc66`) to avoid both pitfalls. The numbers below are from the first 5 checkpoints of the killed single-GPU run (84..420); the full 1668-step DDP run is currently underway and will overwrite ckpts 84..420 with fresh ones.
 
@@ -736,3 +704,108 @@ JSONL: `.models/eval_logs/eval_cora_lp_llaga_cora_lp_20260519_seq4k_5ep_gpu246_g
 
 **LLaGA has a harder leakage problem at test time.** LLaGA's test JSONL pre-samples neighbors using the full adjacency (test edges not yet removed). For **48.2% of LLaGA test positive pairs**, the other endpoint v appears directly in u's pre-sampled `graph` field — meaning v's SimTeG embedding is included in u's `<graph>` token during LLaGA inference. The model can leverage this direct embedding co-occurrence. LLaGA's reported 92.71% (ND) / 92.65% (HO) Cora LP accuracy is therefore measured under partial test-time label leakage. Our 91.47% is measured under a stricter setup (no direct endpoint in the prompt), so the true gap between methods is likely smaller than 1.2 pt.
 
+#### Topo vs. notopo eval on §25 checkpoints (eval_lp_2hop_ablation.py, 2026-05-19/20)
+
+Post-hoc eval that also stratifies by test-time leakage group. Group A (n=74): test pairs where v appears in u's sampled prompt neighbors despite `adj_train` masking (2-hop path exists via training edges). Group B (n=606): clean pairs with no prompt leakage. Both groups together equal the full LLaGA test split (n=680).
+
+| model (training)                        | eval topo | overall acc | overall AUC | yes acc | no acc | group B acc |
+| --------------------------------------- | --------- | ----------: | ----------: | ------: | -----: | ----------: |
+| §25 `cora_lp_20260519` ckpt-748 (topo) | True      |       90.00 |      0.9638 |   88.70 |  91.03 |       88.94 |
+| §25 `cora_lp_20260519` final (topo)    | False     |       89.26 |      0.9579 |   85.71 |  92.08 |       88.12 |
+| posw2 `cora_lp_20260520` final (topo)  | False     |       89.85 |      0.9595 |   87.38 |  91.82 |       88.78 |
+
+Note: group A accuracy is artificially high (~98.65% yes_acc) because those prompt pairs include a 2-hop path to the target node — these pairs sit in a structural grey zone (not a direct edge leak, but not fully blind either). The clean group B numbers are a better lower-bound estimate of true out-of-distribution performance.
+
+JSONL: `.models/eval_logs/lp_2hop_ablation.jsonl`, `lp_2hop_ablation_cora_20260519.jsonl`, `lp_2hop_ablation_cora_20260520_posw2.jsonl`
+
+### §26. Cora LP posw=2 ablation (run tag `cora_lp_20260520_seq4k_5ep_posw2_topo`, **complete**)
+
+Same setup as §25 (`topo=True`, `lp_neg_ratio=1`, `mc_digit + digit0`, `seq=4096`, `hop=2`, `nb=10`, 5 epochs = 1870 steps) with one change: `lp_pos_weight=2.0` — the diffusion loss for positive (yes, cls_label=1) samples is multiplied by 2.0 to address the yes_acc < no_acc imbalance observed in §25. New `lp_pos_weight` flag added to `TMDLMConfig` in `dllm/pipelines/tmdlm/trainer.py`. Evaluated on LLaGA test split (n=680), same eval script as §25.
+
+| ckpt     | acc (%)      | AUC          | yes acc (%) | no acc (%) |
+| -------- | ------------ | ------------ | ----------- | ---------- |
+| 187      | 89.71        | 0.9604       | 84.05       | 94.20      |
+| 374      | 89.56        | 0.9602       | 81.06       | 96.31      |
+| 561      | 89.41        | 0.9656       | 83.06       | 94.46      |
+| 748      | 89.71        | 0.9589       | 87.04       | 91.82      |
+| 935      | 88.68        | 0.9623       | 79.73       | 95.78      |
+| 1122     | 89.85        | 0.9629       | 85.71       | 93.14      |
+| 1309     | 88.68        | 0.9618       | 79.40       | 96.04      |
+| **1496** | **90.88** ⭐ | **0.9647** ⭐ | 85.05       | 95.51      |
+| 1683     | 89.85        | 0.9637       | 81.73       | 96.31      |
+| 1870     | 89.71        | 0.9635       | 81.73       | 96.04      |
+| final    | 89.71        | 0.9635       | 81.73       | 96.04      |
+
+Best accuracy: ckpt-1496 = **90.88%** / AUC = 0.9647. Compared to §25 (posw=1): best acc 91.47 @ ckpt-748 → posw=2 **loses −0.59 pt** at peak accuracy. The posw=2 run also fails to improve yes_acc meaningfully (85.05 at posw2 best vs 88.70 at §25 best), while no_acc stays high (95.51 vs 93.67). The peak shifts to a later checkpoint (ckpt-1496 vs ckpt-748) and the overall curve is flatter but lower. Conclusion: doubling the positive-sample loss weight does not close the yes/no imbalance gap and slightly hurts peak accuracy — posw=1 (uniform weighting) remains the better default for Cora LP.
+
+JSONL: `.models/eval_logs/eval_cora_lp_llaga_posw2_allckpts.jsonl`
+
+---
+
+## Summary
+
+All experiments use `include_neighbor_labels=False` (**nonb**) — neighbor text only, no oracle class labels. All NC experiments use `mc_digit + digit0` unless noted. LP experiments use the same format with `task=lp`.
+
+### Node Classification (NC)
+
+#### Cora — single-dataset
+
+| §   | Run / variant                          | topo   | notopo | Best logit | Best infill | Notes |
+| --- | -------------------------------------- | -----: | -----: | ---------: | ----------: | ----- |
+| §1  | mc_digit, seq=2k, r=64                 | 90.04  | **90.77** | **90.77** | **90.96** | baseline |
+| §8  | mc_digit + boost (Theory×2, RL×3)      | **90.59** | —   | **90.59** | —        | +0.55 vs §1 topo |
+| §11 | mc_digit, seq=4k, r=64 (340 steps)    | 88.56  | 89.67  | 89.67     | —           | step-budget confound |
+| §14 | mc_digit, seq=4k, r=64 (510 steps)    | **90.22** | — | **90.22** | —        | matched budget; +0.18 vs §1 topo |
+| §15 | category_infill EOS-pad, seq=2k, topo  | 89.67  | —      | —         | 89.67       | catinfill control |
+| §16 | mc_digit, seq=2k, r=128, topo          | **90.41** | — | **90.41** | —        | +0.37 vs r=64 topo; gap halved |
+
+#### PubMed — single-dataset
+
+| §   | Run / variant                          | topo   | notopo | Best logit | Best infill | Notes |
+| --- | -------------------------------------- | -----: | -----: | ---------: | ----------: | ----- |
+| §9  | mc_digit, seq=2k, r=64                 | 94.47  | **95.18** | **95.18** | **95.64** | seq=2k baseline |
+| §13 | mc_digit, seq=4k, r=64                 | **96.30** | 95.70 | **96.30** | —        | topo wins at seq=4k (+0.60 vs notopo) |
+
+#### Cora + PubMed — joint training
+
+| §  | Run / variant                              | Status   | Cora topo | Cora notopo | PubMed topo | PubMed notopo |
+| -- | ------------------------------------------ | -------- | --------: | ----------: | ----------: | ------------: |
+| §6 | catinfill, no resampling                   | killed   | 70.30     | 63.84       | 77.56       | 77.48         |
+| §7 | mc_digit + balance_datasets                | complete | **90.96** | **90.77**   | 94.93       | **95.28**     |
+
+§6 collapses on Cora due to PubMed dominating the loss with unconstrained catinfill answers. §7 fixes both issues with `mc_digit` (single-token answer) + dataset balancing; it matches or exceeds all §1 single-dataset numbers.
+
+#### ogbn-arxiv
+
+| §   | Run / variant                          | Best acc (full test) | vs LLaGA-HO (76.66%) | Notes |
+| --- | -------------------------------------- | -------------------: | --------------------: | ----- |
+| §20 | mc_digit, seq=4k, 22%-cap (snapshot)  | ~70.0 (N=1000, 25% of training) | — | superseded |
+| §21 | mc_digit, seq=4k, 22%-cap, r=128      | 75.03 (N=5000)       | −1.63                 | neighbor jitter +1.8 pt at N=1000 |
+| §22 | mc_digit, seq=4k, full-train, 1-epoch | 76.16                | −0.50                 | +1.98 pt vs §21 |
+| §23 | mc_digit, seq=4k, full-train, 3-epoch | **76.39**            | **−0.27** (within σ)  | best; 3ep ≈ 1ep (+0.23 pt only) |
+
+#### ogbn-products (NC)
+
+| §   | Run / variant                          | Best acc | vs zero-shot | Notes |
+| --- | -------------------------------------- | -------: | -----------: | ----- |
+| §24 | mc_digit, seq=2k, topo, partial eval   | 58.50    | +35 pt       | 74% isolated nodes; topo degenerate |
+
+#### Cross-domain and seq-length findings (§11–§19)
+
+- **seq=4k is neutral-to-positive on Cora** (§14): with matched step budget (+0.18 pt over seq=2k).
+- **seq=4k flips topo/notopo on PubMed** (§13 vs §9): gap goes from −0.71 (topo lags) to +0.60 (topo leads).
+- **r=128 closes ~51% of the cora topo gap** (§16): gap −0.73 → −0.36; not sufficient on its own.
+- **Cross-domain transfer** (§11, §19): notopo is more cross-domain robust than topo in both directions (cora→pubmed and pubmed→cora).
+
+---
+
+### Link Prediction (LP) — Cora
+
+Eval on LLaGA's exact test split (`edge_sampled_2_10_only_test.jsonl`, n=680). **Note**: 80% of LLaGA test positive edges were in our SFT training set (split mismatch); the comparison understates our true difficulty. LLaGA's eval has a separate leakage issue (48% of test pairs include the target endpoint in the prompt).
+
+| §   | Run / variant                    | Best acc | Best AUC | vs LLaGA-ND (92.71%) | Notes |
+| --- | -------------------------------- | -------: | -------: | -------------------: | ----- |
+| §25 | topo, posw=1, 5ep               | **91.47** @ ckpt-748 | 0.9674 @ ckpt-1309 | −1.24 pt | best overall |
+| §26 | topo, posw=2, 5ep               | 90.88 @ ckpt-1496 | 0.9647 | −1.83 pt | posw=2 hurts (−0.59 pt vs §25) |
+
+Base LLaDA-8B zero-shot: 52.18% (AUC 0.567) — SFT gives +39 pt lift. Primary open target: retrain on LLaGA's own train split to make the comparison fully fair.
