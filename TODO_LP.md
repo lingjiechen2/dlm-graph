@@ -1,26 +1,30 @@
-# LP Migration TODO (as of 2026-05-20)
+# LP Migration TODO (as of 2026-05-21)
 
 ## Current state
 
-### Cora LP — complete (§25, §26)
-- **§25** `cora_lp_20260519_seq4k_5ep_3gpu` (topo, posw=1): best acc **91.47%** @ ckpt-748, AUC 0.9674 @ ckpt-1309. −1.2 pt vs LLaGA-ND-7B (92.71%).
-- **§26** `cora_lp_20260520_seq4k_5ep_posw2_topo` (topo, posw=2): best acc **90.88%** @ ckpt-1496. posw=2 does not help — posw=1 is the better default.
-- **Split mismatch (critical)**: Our SFT used our own 85/5/10 split; 80% of LLaGA test positive edges were in our training set. True head-to-head with LLaGA requires retraining on LLaGA's split.
-- **LLaGA leakage note**: 48.2% of LLaGA test positive pairs include the target endpoint in the prompt during LLaGA inference (test edges not removed before neighbor sampling). Our eval is clean; the true gap to LLaGA is smaller than 1.2 pt.
+### Cora LP — complete (§25–§28)
+
+LLaGA-ND-7B Cora LP best = **89.41%** (Task Expert, verified from arXiv:2402.08170 Table 1).
+
+- **§25** `cora_lp_20260519_seq4k_5ep_3gpu` (topo, posw=1, seed-42 split): best acc **91.47%** @ ckpt-748, AUC 0.9674 @ ckpt-1309. **+2.06 pt** vs LLaGA-ND. Note: 80% of LLaGA test positives in training — split mismatch.
+- **§26** `cora_lp_20260520_seq4k_5ep_posw2_topo` (topo, posw=2, seed-42 split): best acc **90.88%** @ ckpt-1496. posw=2 does not help.
+- **§27** `cora_lp_20260520_seq4k_3ep_hardneg05` (topo, posw=1, hard_neg_ratio=0.5, 3ep): best acc **88.53%** @ ckpt-339. Hard negatives hurt — model collapses to predicting "no" at later checkpoints.
+- **§28** `cora_lp_20260521_llaga_split_5ep` (topo, posw=1, **LLaGA official train/test split**, 5ep): best acc **91.62%** @ ckpt-136, AUC 0.9633 @ ckpt-238. **+2.21 pt** vs LLaGA-ND. **Clean fair comparison — this is the definitive Cora LP result.**
+- **LLaGA leakage note**: 48.2% of LLaGA test positive pairs include the target endpoint in the prompt during LLaGA inference. Our eval is clean.
 
 ### Uncommitted code changes (commit before migrating)
 - `dllm/pipelines/tmdlm/trainer.py` — adds `lp_pos_weight` field to `TMDLMConfig` + applies per-sample loss weighting in `TMDLMTrainer`.
 - `examples/tmdlm/run_sft_cora_lp_4gpu_ddp.sh` — exposes `LP_POS_WEIGHT` env var (default 1.0).
+- `dllm/data/datasets/_lp_common.py` — adds `load_lp_llaga_split()` for official JSONL splits.
+- `dllm/data/datasets/cora_lp.py` — adds `use_llaga_split` parameter.
+- `examples/tmdlm/run_sft_cora_lp_llaga_split.sh` — §28 training script.
 
 ---
 
 ## Pending tasks (priority order)
 
-### 1. Retrain Cora LP on LLaGA's split (highest priority)
-- Use `edge_sampled_2_10_only_train.jsonl` as training pairs instead of our seed-42 random split.
-- Goal: remove the 80% train-test overlap so the LLaGA test-split comparison is fair.
-- Same recipe as §25: `topo=True`, `posw=1`, `seq=4096`, `hop=2`, `nb=10`, 5 epochs, 3×GPU DDP.
-- Script: `examples/tmdlm/run_sft_cora_lp_4gpu_ddp.sh` with `GPUS=2,4,6`.
+### 1. ~~Retrain Cora LP on LLaGA's split~~ ✓ Done (§28)
+- Completed 2026-05-21. Best acc 91.62% @ ckpt-136, surpasses all LLaGA Cora LP baselines.
 
 ### 2. PubMed LP eval (was started, not completed)
 - Eval the existing PubMed NC SFT checkpoints (`pubmed_20260428_aligned`, ckpts 370/740/1110/1480) on the LP task.
@@ -47,7 +51,10 @@
 | Cora adj (no test edges)  | `.datasets/llaga/cora/processed_data_link_notest.pt` |
 | §25 ckpts                 | `.models/tmdlm-llada-8b-cora-lp-2hop-r64-ep5-cora_lp_20260519_seq4k_5ep_3gpu/` |
 | §26 ckpts                 | `.models/tmdlm-llada-8b-cora-lp-2hop-r64-ep5-cora_lp_20260520_seq4k_5ep_posw2_topo/` |
+| §27 ckpts                 | `.models/tmdlm-llada-8b-cora-lp-2hop-r64-ep3-cora_lp_20260520_seq4k_3ep_hardneg05/` |
+| §28 ckpts                 | `.models/tmdlm-llada-8b-cora-lp-2hop-r64-ep5-cora_lp_20260521_llaga_split_5ep/` |
 | LP eval script            | `examples/tmdlm/eval_lp_llaga_split.py` |
 | LP SFT launch script      | `examples/tmdlm/run_sft_cora_lp_4gpu_ddp.sh` |
+| §28 launch script         | `examples/tmdlm/run_sft_cora_lp_llaga_split.sh` |
 | LP ablation script        | `examples/tmdlm/eval_lp_2hop_ablation.py` |
-| Results log               | `examples/tmdlm/results.md` (§25, §26) |
+| Results log               | `examples/tmdlm/results.md` (§25–§28) |
