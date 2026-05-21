@@ -6,6 +6,7 @@ edge-level mechanics (split, neg sampling, leak prevention).
 """
 from __future__ import annotations
 
+import json
 import os
 import random
 from pathlib import Path
@@ -196,5 +197,85 @@ def load_lp_split(
             "train_neg": len(cache["train_neg"]),
             "val_neg": len(cache["val_neg"]),
             "test_neg": len(cache["test_neg"]),
+        },
+    }
+
+
+def _build_adj_from_edge_index(edge_index_tensor) -> dict[int, list[int]]:
+    adj: dict[int, list[int]] = {}
+    ei = edge_index_tensor.cpu().numpy()
+    for src, dst in zip(ei[0], ei[1]):
+        u, v = int(src), int(dst)
+        adj.setdefault(u, []).append(v)
+    return adj
+
+
+def load_lp_llaga_split(
+    dataset_name: str,
+    nc_loader: Callable[[dict, str, int], tuple],
+    config: dict,
+    split: str,
+) -> dict:
+    """Load LP edges from LLaGA's official train/test JSONL files.
+
+    Uses ``edge_sampled_2_10_only_train.jsonl`` for training and
+    ``edge_sampled_2_10_only_test.jsonl`` for evaluation.
+    ``adj_train`` is built from ``processed_data_link_notest.pt`` (test edges
+    already removed by LLaGA), so neighbor sampling during training never
+    leaks test edges.
+
+    Returns the same dict shape as ``load_lp_split``.
+    """
+    if split not in ("train", "val", "test"):
+        raise ValueError(f"Unknown split={split!r}")
+
+    # LLaGA only provides train + test; we map val -> train for convenience
+    # (val is not used for HP selection in our LP SFT pipeline).
+    jsonl_split = "train" if split in ("train", "val") else "test"
+    data_dir = _CACHE_ROOT / dataset_name
+    jsonl_path = data_dir / f"edge_sampled_2_10_only_{jsonl_split}.jsonl"
+    notest_pt = data_dir / "processed_data_link_notest.pt"
+
+    if not jsonl_path.exists():
+        raise FileNotFoundError(f"LLaGA LP JSONL not found: {jsonl_path}")
+    if not notest_pt.exists():
+        raise FileNotFoundError(f"LLaGA notest graph not found: {notest_pt}")
+
+    pos_edges: list[tuple[int, int]] = []
+    neg_edges: list[tuple[int, int]] = []
+    with open(jsonl_path) as f:
+        for line in f:
+            obj = json.loads(line)
+            u, v = int(obj["id"][0]), int(obj["id"][1])
+            label = obj["conversations"][1]["value"]
+            if label == "yes":
+                pos_edges.append((u, v))
+            else:
+                neg_edges.append((u, v))
+
+    node_data, adj_orig, _cls, _ids = nc_loader(config, "train", seed=42)
+
+    pt_data = torch.load(notest_pt, map_location="cpu", weights_only=False)
+    adj_train = _build_adj_from_edge_index(pt_data.edge_index)
+
+    n_nodes = max(node_data.keys()) + 1
+    n_total_edges = len(_undirected_edge_set(adj_orig))
+
+    return {
+        "pos_edges": pos_edges,
+        "neg_edges": neg_edges,
+        "node_data": node_data,
+        "adj_train": adj_train,
+        "adj_orig": adj_orig,
+        "class_names": ["no", "yes"],
+        "n_nodes": n_nodes,
+        "n_total_edges": n_total_edges,
+        "split_counts": {
+            "train_pos": len(pos_edges) if split == "train" else 0,
+            "val_pos": 0,
+            "test_pos": len(pos_edges) if split == "test" else 0,
+            "train_neg": len(neg_edges) if split == "train" else 0,
+            "val_neg": 0,
+            "test_neg": len(neg_edges) if split == "test" else 0,
         },
     }

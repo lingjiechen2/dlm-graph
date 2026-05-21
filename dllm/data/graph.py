@@ -1884,6 +1884,38 @@ def _sample_lp_neighbors(
     return u_ids2, u_hops2, v_ids2, v_hops2
 
 
+def _sample_hard_negative(
+    u: int,
+    adj: dict[int, list[int]],
+    pos_edge_set: set[tuple[int, int]],
+    used: set[tuple[int, int]],
+    rng: random.Random,
+) -> tuple[int, int] | None:
+    """Sample one 2-hop structural hard negative for u.
+
+    Walks up to 10 of u's 1-hop neighbours, then samples a 2-hop node z
+    that has no direct edge to u (i.e. not in pos_edge_set) and has not
+    already been assigned to another pair. Returns canonical (lo, hi) or
+    None when no candidate exists (caller falls back to random negative).
+    """
+    nb1 = list(adj.get(u, []))
+    if not nb1:
+        return None
+    rng.shuffle(nb1)
+    for w in nb1[:10]:
+        candidates = []
+        for z in adj.get(w, []):
+            if z == u:
+                continue
+            a, b = (u, z) if u < z else (z, u)
+            if (a, b) not in pos_edge_set and (a, b) not in used:
+                candidates.append((a, b))
+        if candidates:
+            chosen = rng.choice(candidates)
+            return chosen
+    return None
+
+
 def _build_lp_samples(
     pos_edges: list[tuple[int, int]],
     neg_edges: list[tuple[int, int]],
@@ -1896,11 +1928,32 @@ def _build_lp_samples(
     seed: int,
     mask_target_text: bool,
     max_samples: int = 0,
+    hard_neg_ratio: float = 0.0,
+    pos_edge_set: set[tuple[int, int]] | None = None,
 ) -> list[dict]:
     rng = random.Random(seed)
     samples: list[dict] = []
 
-    pairs = [((u, v), 1) for u, v in pos_edges] + [((u, v), 0) for u, v in neg_edges]
+    # Replace a fraction of random negatives with 2-hop structural hard negatives.
+    effective_neg_edges = list(neg_edges)
+    if hard_neg_ratio > 0.0 and pos_edge_set is not None and neg_edges:
+        n_hard = max(1, int(len(neg_edges) * hard_neg_ratio))
+        indices = rng.sample(range(len(neg_edges)), min(n_hard, len(neg_edges)))
+        used: set[tuple[int, int]] = set(pos_edge_set) | set(neg_edges)
+        replaced = 0
+        for idx in indices:
+            u = effective_neg_edges[idx][0]
+            hard = _sample_hard_negative(u, adj_train, pos_edge_set, used, rng)
+            if hard is not None:
+                used.add(hard)
+                effective_neg_edges[idx] = hard
+                replaced += 1
+        logger.info(
+            "Hard negatives: replaced %d/%d random negatives (hard_neg_ratio=%.2f)",
+            replaced, len(neg_edges), hard_neg_ratio,
+        )
+
+    pairs = [((u, v), 1) for u, v in pos_edges] + [((u, v), 0) for u, v in effective_neg_edges]
     rng.shuffle(pairs)
 
     for (u, v), label in pairs:
@@ -1944,6 +1997,8 @@ def load_lp_dataset(
     neg_ratio: int = 1,
     mask_target_text: bool = False,
     max_samples: int = 0,
+    hard_neg_ratio: float = 0.0,
+    use_llaga_split: bool = False,
 ) -> Dataset:
     """Load a link-prediction dataset and return an HF Dataset of LP samples.
 
@@ -1959,9 +2014,20 @@ def load_lp_dataset(
         )
 
     config = DATASET_CONFIGS[dataset_name]
+    _extra = {"use_llaga_split": True} if use_llaga_split else {}
     bundle = lp_loader.load(
-        config, split=split, seed=seed, neg_ratio=neg_ratio
+        config, split=split, seed=seed, neg_ratio=neg_ratio, **_extra
     )
+
+    # Build pos_edge_set from adj_orig for hard negative validity checks.
+    pos_edge_set: set[tuple[int, int]] | None = None
+    if hard_neg_ratio > 0.0:
+        pos_edge_set = {
+            (u, v) if u < v else (v, u)
+            for u, nbrs in bundle["adj_orig"].items()
+            for v in nbrs
+            if u != v
+        }
 
     samples = _build_lp_samples(
         pos_edges=bundle["pos_edges"],
@@ -1975,6 +2041,8 @@ def load_lp_dataset(
         seed=seed,
         mask_target_text=mask_target_text,
         max_samples=max_samples,
+        hard_neg_ratio=hard_neg_ratio,
+        pos_edge_set=pos_edge_set,
     )
     for s in samples:
         s["dataset"] = dataset_name

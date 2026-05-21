@@ -51,6 +51,26 @@ class DataArguments:
         default=1,
         metadata={"help": "Negative samples per positive for link prediction (default 1:1)."},
     )
+    lp_hard_neg_ratio: float = field(
+        default=0.0,
+        metadata={
+            "help": (
+                "Fraction of random negatives to replace with 2-hop structural hard negatives "
+                "(nodes sharing a common neighbour with u but no direct edge). "
+                "0.0 = all random (default), 0.5 = half hard half random, 1.0 = all hard."
+            )
+        },
+    )
+    lp_use_llaga_split: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Use LLaGA's official edge_sampled_2_10_only_{train,test}.jsonl split "
+                "instead of our random seed-42 split. Fixes train/test leakage when "
+                "comparing against LLaGA baselines."
+            )
+        },
+    )
     dataset_name: str = field(
         default="cora",
         metadata={
@@ -219,6 +239,8 @@ def train():
                 max_hops=data_args.max_hops,
                 mask_target_text=data_args.mask_target_text,
                 neg_ratio=data_args.lp_neg_ratio,
+                hard_neg_ratio=data_args.lp_hard_neg_ratio,
+                use_llaga_split=data_args.lp_use_llaga_split,
             )
             train_dataset = load_lp_dataset(
                 ds_arg, split="train",

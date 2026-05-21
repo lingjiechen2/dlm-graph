@@ -7,7 +7,7 @@ existing callers and on-disk caches keep working.
 from __future__ import annotations
 
 from . import cora as cora_nc
-from ._lp_common import load_lp_split
+from ._lp_common import load_lp_llaga_split, load_lp_split
 
 
 def load(
@@ -17,9 +17,18 @@ def load(
     neg_ratio: int = 1,
     val_frac: float = 0.05,
     test_frac: float = 0.10,
+    use_llaga_split: bool = False,
 ) -> dict:
     """Load the cora LP split. See ``_lp_common.load_lp_split`` for the
-    returned dict schema."""
+    returned dict schema. Set ``use_llaga_split=True`` to use LLaGA's official
+    train/test JSONL instead of our random seed-42 split."""
+    if use_llaga_split:
+        return load_lp_llaga_split(
+            dataset_name="cora",
+            nc_loader=cora_nc.load,
+            config=config,
+            split=split,
+        )
     return load_lp_split(
         dataset_name="cora",
         nc_loader=cora_nc.load,
