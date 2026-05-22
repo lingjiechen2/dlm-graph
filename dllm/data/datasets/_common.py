@@ -62,7 +62,7 @@ def load_llaga_processed_data(
     if not data_path.exists():
         return None
 
-    data = torch.load(data_path, map_location="cpu")
+    data = torch.load(data_path, map_location="cpu", weights_only=False)
     edge_index = data["edge_index"]
     if hasattr(edge_index, "cpu"):
         edge_index = edge_index.cpu().numpy()

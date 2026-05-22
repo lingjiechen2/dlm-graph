@@ -1348,6 +1348,12 @@ def _tag_dataset_cache_key(
 
 
 def _tag_save_to_cache(dataset: Dataset, cache_dir: Path) -> None:
+    # In DDP, only rank 0 writes the cache to avoid 64 ranks racing on
+    # save_to_disk → corrupt cache. Other ranks keep the in-memory dataset and
+    # return without touching disk; the next run will hit the cache that rank 0
+    # wrote here. Detected from torch.distributed.run env vars.
+    if int(os.environ.get("RANK", "0")) != 0:
+        return
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
         # save_to_disk requires an empty / new dir
@@ -2048,8 +2054,9 @@ def load_lp_dataset(
         s["dataset"] = dataset_name
 
     dataset = Dataset.from_list(samples)
+    suffix = " [llaga-split]" if llaga_split_root else ""
     dataset.info.description = (
-        f"LP {dataset_name} ({split}) "
+        f"LP {dataset_name} ({split}){suffix} "
         f"pos={len(bundle['pos_edges'])} neg={len(bundle['neg_edges'])}"
     )
     return dataset
