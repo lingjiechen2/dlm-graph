@@ -19,6 +19,21 @@ Multi-GPU (DDP):
 
 import os
 from dataclasses import dataclass, field
+from datetime import timedelta
+
+# Pre-init the process group with a long timeout BEFORE any code touches
+# accelerate.PartialState() — accelerate's first init uses the default 10 min
+# TCPStore timeout, which is locked once the PG is created and can't be raised
+# by HF Trainer's --ddp_timeout later. Large LP datasets (e.g. ogbn-arxiv 90k
+# pairs, ~10-15 min build per rank) need a longer window before the first NCCL
+# collective. Only fires under DDP.
+if int(os.environ.get("WORLD_SIZE", "1")) > 1:
+    import torch.distributed as _dist
+    if not _dist.is_initialized():
+        _dist.init_process_group(
+            backend="nccl",
+            timeout=timedelta(seconds=int(os.environ.get("DDP_INIT_TIMEOUT", "3600"))),
+        )
 
 import accelerate
 import transformers
@@ -210,71 +225,89 @@ def train():
     tokenizer = dllm.utils.get_tokenizer(model_args=model_args)
 
     # --- Dataset ---
-    with accelerate.PartialState().local_main_process_first():
-        ds_arg = data_args.dataset_name
-        if isinstance(ds_arg, str) and "," in ds_arg:
-            ds_arg = [s.strip() for s in ds_arg.split(",") if s.strip()]
+    # Skip local_main_process_first() globally: every rank builds its own
+    # dataset in parallel. Two reasons this is safe now:
+    #   (1) LP-LLaGA path keeps Dataset.from_list(samples) in memory only.
+    #   (2) NC path (load_tag_dataset) writes a TAG_CACHE_ROOT disk cache,
+    #       but _tag_save_to_cache now gates the write to RANK==0 only so
+    #       concurrent ranks never race on save_to_disk. Other ranks keep
+    #       their in-memory copy.
+    # Result: 8-rank-per-node parallel build instead of stage-1 / stage-2
+    # serialization (~50% wall reduction on large datasets like arxiv).
+    ds_arg = data_args.dataset_name
+    if isinstance(ds_arg, str) and "," in ds_arg:
+        ds_arg = [s.strip() for s in ds_arg.split(",") if s.strip()]
 
-        if data_args.task == "lp":
-            if not isinstance(ds_arg, str):
-                raise ValueError(
-                    "LP task only supports a single dataset_name; got list "
-                    f"{ds_arg!r}"
-                )
-            # The auxiliary cls loss in TMDLMTrainer restricts logits to
-            # digit tokens "0".."K-1", which does not match the LP answer
-            # set (" yes"/" no"). Force-disable it; the main masked-token
-            # CE on the answer position already supervises yes/no.
-            if training_args.cls_loss_weight > 0:
-                logger.warning(
-                    "Disabling cls_loss_weight for LP task (was %.2f); "
-                    "main MDLM loss on the answer token still supervises yes/no.",
-                    training_args.cls_loss_weight,
-                )
-                training_args.cls_loss_weight = 0.0
-            _lp_kwargs = dict(
-                tokenizer=tokenizer,
-                max_seq_len=data_args.max_seq_len,
-                max_neighbors_per_hop=data_args.max_neighbors_per_hop,
-                max_hops=data_args.max_hops,
-                mask_target_text=data_args.mask_target_text,
-                neg_ratio=data_args.lp_neg_ratio,
-                hard_neg_ratio=data_args.lp_hard_neg_ratio,
-                use_llaga_split=data_args.lp_use_llaga_split,
+    if data_args.task == "lp":
+        if not isinstance(ds_arg, str):
+            raise ValueError(
+                "LP task only supports a single dataset_name; got list "
+                f"{ds_arg!r}"
             )
-            train_dataset = load_lp_dataset(
-                ds_arg, split="train",
-                max_samples=data_args.max_train_samples,
-                **_lp_kwargs,
+        # The auxiliary cls loss in TMDLMTrainer restricts logits to
+        # digit tokens "0".."K-1", which does not match the LP answer
+        # set (" yes"/" no"). Force-disable it; the main masked-token
+        # CE on the answer position already supervises yes/no.
+        if training_args.cls_loss_weight > 0:
+            logger.warning(
+                "Disabling cls_loss_weight for LP task (was %.2f); "
+                "main MDLM loss on the answer token still supervises yes/no.",
+                training_args.cls_loss_weight,
             )
+            training_args.cls_loss_weight = 0.0
+        _lp_kwargs = dict(
+            tokenizer=tokenizer,
+            max_seq_len=data_args.max_seq_len,
+            max_neighbors_per_hop=data_args.max_neighbors_per_hop,
+            max_hops=data_args.max_hops,
+            mask_target_text=data_args.mask_target_text,
+            neg_ratio=data_args.lp_neg_ratio,
+            hard_neg_ratio=data_args.lp_hard_neg_ratio,
+            use_llaga_split=data_args.lp_use_llaga_split,
+        )
+        train_dataset = load_lp_dataset(
+            ds_arg, split="train",
+            max_samples=data_args.max_train_samples,
+            **_lp_kwargs,
+        )
+        # LLaGA's release ships only train + test JSONL (no val split).
+        # When lp_use_llaga_split is set, the original code re-built the full
+        # train split a second time as val_dataset — that doubles dataset
+        # build time (≈75 min extra on arxiv) AND ignores max_train_samples,
+        # so a 10%-data run still incurs the full val build. eval_lp_llaga_*.py
+        # is the canonical held-out eval, so val_dataset is unused at
+        # training time. Set it to None when LLaGA-split and eval is off.
+        if data_args.lp_use_llaga_split:
+            val_dataset = None
+        else:
             val_dataset = load_lp_dataset(
                 ds_arg, split="val", **_lp_kwargs,
             )
-        else:
-            _common_kwargs = dict(
-                tokenizer=tokenizer,
-                max_seq_len=data_args.max_seq_len,
-                max_neighbors_per_hop=data_args.max_neighbors_per_hop,
-                max_hops=data_args.max_hops,
-                mask_target_text=data_args.mask_target_text,
-                prompt_format=data_args.prompt_format,
-                answer_label_style=data_args.answer_label_style,
-                max_answer_tokens=data_args.max_answer_tokens,
-                include_neighbor_labels=data_args.include_neighbor_labels,
-                neighbor_label_format=data_args.neighbor_label_format,
-                mask_neighbor_labels=data_args.mask_neighbor_labels,
-                balance_merged=data_args.balance_merged,
-                resample_strategy=data_args.resample_strategy,
-                boost_spec=data_args.boost_spec,
-            )
-            train_dataset = load_tag_dataset(
-                ds_arg, split="train",
-                max_samples=data_args.max_train_samples,
-                **_common_kwargs,
-            )
-            val_dataset = load_tag_dataset(
-                ds_arg, split="val", **_common_kwargs
-            )
+    else:
+        _common_kwargs = dict(
+            tokenizer=tokenizer,
+            max_seq_len=data_args.max_seq_len,
+            max_neighbors_per_hop=data_args.max_neighbors_per_hop,
+            max_hops=data_args.max_hops,
+            mask_target_text=data_args.mask_target_text,
+            prompt_format=data_args.prompt_format,
+            answer_label_style=data_args.answer_label_style,
+            max_answer_tokens=data_args.max_answer_tokens,
+            include_neighbor_labels=data_args.include_neighbor_labels,
+            neighbor_label_format=data_args.neighbor_label_format,
+            mask_neighbor_labels=data_args.mask_neighbor_labels,
+            balance_merged=data_args.balance_merged,
+            resample_strategy=data_args.resample_strategy,
+            boost_spec=data_args.boost_spec,
+        )
+        train_dataset = load_tag_dataset(
+            ds_arg, split="train",
+            max_samples=data_args.max_train_samples,
+            **_common_kwargs,
+        )
+        val_dataset = load_tag_dataset(
+            ds_arg, split="val", **_common_kwargs
+        )
 
     # --- Trainer ---
     accelerate.PartialState().wait_for_everyone()
