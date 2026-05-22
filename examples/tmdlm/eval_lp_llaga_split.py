@@ -122,12 +122,18 @@ def _build_samples(
     max_hops: int,
     seed: int,
     max_samples: int,
+    shard_rank: int = 0,
+    shard_world: int = 1,
 ) -> list[dict]:
     rng = random.Random(seed)
     pairs = [((u, v), 1) for u, v in pos_edges] + [((u, v), 0) for u, v in neg_edges]
     rng.shuffle(pairs)
     if max_samples:
         pairs = pairs[:max_samples]
+    # DDP eval: each rank evaluates 1/world_size of the pairs (strided after
+    # the seeded shuffle so partitions are balanced in yes/no ratio).
+    if shard_world > 1:
+        pairs = pairs[shard_rank::shard_world]
 
     samples = []
     for (u, v), label in pairs:
@@ -224,22 +230,33 @@ def evaluate(model, tokenizer, dataset, yesno_ids, args: EvalArgs):
 
         pbar.set_postfix(acc=f"{100.0 * correct / max(total, 1):.2f}%", n=total)
 
-    accuracy = 100.0 * correct / max(total, 1)
-    per_label = {
-        "no": 100.0 * correct_per[0] / max(total_per[0], 1),
-        "yes": 100.0 * correct_per[1] / max(total_per[1], 1),
+    # Return raw local counts; aggregation across DDP ranks happens in main().
+    return {
+        "correct": correct,
+        "total": total,
+        "correct_per": correct_per,
+        "total_per": total_per,
+        "yes_probs": yes_probs,
+        "gts": gts,
     }
-    auc = None
-    if len(set(gts)) == 2:
-        try:
-            from sklearn.metrics import roc_auc_score
-            auc = float(roc_auc_score(gts, yes_probs))
-        except Exception as e:
-            logger.warning("AUC failed: %s", e)
-    return accuracy, auc, per_label, total
 
 
 def main():
+    # DDP setup. Each rank shards the test pairs (1/world_size each), runs
+    # inference independently, then all_reduce + all_gather aggregates counts
+    # and yes_probs for the global accuracy/AUC. Single-GPU usage is unchanged
+    # — when WORLD_SIZE == 1, dist is not initialized and shard math is no-op.
+    from datetime import timedelta
+    import torch.distributed as dist
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    rank = int(os.environ.get("RANK", "0"))
+    if world_size > 1 and not dist.is_initialized():
+        dist.init_process_group(
+            backend="nccl",
+            timeout=timedelta(seconds=int(os.environ.get("DDP_INIT_TIMEOUT", "3600"))),
+        )
+        torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", "0")))
+
     parser = transformers.HfArgumentParser(EvalArgs)
     (args,) = parser.parse_args_into_dataclasses()
 
@@ -269,20 +286,61 @@ def main():
     logger.info("Loading node text data ...")
     node_data = _load_node_data(args.dataset_name)
 
-    logger.info("Building text prompts ...")
+    logger.info("[rank %d/%d] Building text prompts (shard) ...", rank, world_size)
     dataset = _build_samples(
         pos_edges, neg_edges, node_data, adj_train, tokenizer,
         args.max_seq_len, args.max_neighbors_per_hop, args.max_hops,
         args.seed, args.max_samples,
+        shard_rank=rank, shard_world=world_size,
     )
-    logger.info("Built %d samples", len(dataset))
+    logger.info("[rank %d/%d] Built %d local samples", rank, world_size, len(dataset))
 
     t0 = time.time()
-    accuracy, auc, per_label, n = evaluate(model, tokenizer, dataset, yesno_ids, args)
+    out = evaluate(model, tokenizer, dataset, yesno_ids, args)
     elapsed = time.time() - t0
 
+    # Aggregate across ranks
+    correct = out["correct"]; total = out["total"]
+    cper, tper = out["correct_per"], out["total_per"]
+    yes_probs = out["yes_probs"]; gts = out["gts"]
+    if world_size > 1:
+        device = next(model.parameters()).device
+        counts = torch.tensor(
+            [correct, total, cper[0], tper[0], cper[1], tper[1]],
+            device=device, dtype=torch.long,
+        )
+        dist.all_reduce(counts)
+        c_correct, c_total, c0, t0c, c1, t1c = counts.tolist()
+        correct, total = c_correct, c_total
+        cper = {0: c0, 1: c1}; tper = {0: t0c, 1: t1c}
+        # AUC needs concatenated probs/gts on rank 0
+        gathered_probs = [None] * world_size
+        gathered_gts = [None] * world_size
+        dist.all_gather_object(gathered_probs, yes_probs)
+        dist.all_gather_object(gathered_gts, gts)
+        yes_probs = sum(gathered_probs, [])
+        gts = sum(gathered_gts, [])
+
+    accuracy = 100.0 * correct / max(total, 1)
+    per_label = {
+        "no": 100.0 * cper[0] / max(tper[0], 1),
+        "yes": 100.0 * cper[1] / max(tper[1], 1),
+    }
+    auc = None
+    if len(set(gts)) == 2:
+        try:
+            from sklearn.metrics import roc_auc_score
+            auc = float(roc_auc_score(gts, yes_probs))
+        except Exception as e:
+            logger.warning("AUC failed: %s", e)
+
+    if rank != 0:
+        if world_size > 1:
+            dist.destroy_process_group()
+        return
+
     logger.info("=" * 60)
-    logger.info("exp=%s  dataset=%s  n=%d", args.exp, args.dataset_name, n)
+    logger.info("exp=%s  dataset=%s  n=%d  world_size=%d", args.exp, args.dataset_name, total, world_size)
     logger.info("Accuracy:  %.2f%%", accuracy)
     logger.info("AUC:       %s", f"{auc:.4f}" if auc else "n/a")
     logger.info("Per-label: no=%.2f%%  yes=%.2f%%", per_label["no"], per_label["yes"])
@@ -294,7 +352,7 @@ def main():
         "exp": args.exp,
         "dataset": args.dataset_name,
         "split": "llaga_test",
-        "n_samples": n,
+        "n_samples": total,
         "accuracy": round(accuracy, 2),
         "auc": round(auc, 4) if auc else None,
         "per_label_accuracy": {k: round(v, 2) for k, v in per_label.items()},
@@ -306,11 +364,14 @@ def main():
             "use_topology_mask": args.use_topology_mask,
             "batch_size": args.batch_size,
             "seed": args.seed,
+            "world_size": world_size,
         },
         "elapsed_seconds": round(elapsed, 1),
     }
     with open(args.log_file, "a") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    if world_size > 1:
+        dist.destroy_process_group()
     logger.info("Logged to %s", args.log_file)
 
 
