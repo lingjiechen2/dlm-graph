@@ -25,9 +25,10 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 import transformers
 from tqdm import tqdm
@@ -455,14 +456,36 @@ def evaluate_layer0(
 
 
 def main():
+    # DDP setup. Each rank evaluates a strided shard of the test set
+    # (test_dataset[rank::world_size]); per-class counts are all_reduced
+    # to global counts before writing the jsonl. Single-GPU usage is
+    # unchanged: when WORLD_SIZE == 1, dist stays uninitialized and
+    # the shard math is a no-op.
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    rank = int(os.environ.get("RANK", "0"))
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    if world_size > 1:
+        if not dist.is_initialized():
+            dist.init_process_group(
+                backend="nccl",
+                timeout=timedelta(seconds=int(os.environ.get("DDP_INIT_TIMEOUT", "3600"))),
+            )
+        torch.cuda.set_device(local_rank)
+
     parser = transformers.HfArgumentParser(EvalLogitArgs)
     (args,) = parser.parse_args_into_dataclasses()
+
+    if world_size > 1 and args.dump_logits_path is not None:
+        raise ValueError(
+            "dump_logits_path is not yet supported under DDP (would need all_gather of "
+            "scores/cls_labels/predictions). Run with WORLD_SIZE=1 for dumping."
+        )
 
     # Resolve model path
     model_path = dllm.utils.resolve_with_base_env(
         args.model_name_or_path, "BASE_MODELS_DIR"
     )
-    logger.info("Loading model from %s ...", model_path)
+    logger.info("[rank %d/%d] Loading model from %s ...", rank, world_size, model_path)
 
     # Load model and tokenizer
     model_args = dllm.utils.ModelArguments(model_name_or_path=model_path)
@@ -561,47 +584,67 @@ def main():
     # distribution shift.
     log_prior = None
     if args.apply_class_prior_calibration:
-        logger.info("Loading train split for class prior calibration (resample=%s, boost=%s, max_train_samples=%d)...",
-                    args.train_resample_strategy, args.train_boost_spec, args.train_max_train_samples)
-        train_dataset_for_prior = load_tag_dataset(
-            args.dataset_name,
-            tokenizer=tokenizer,
-            split="train",
-            max_seq_len=args.max_seq_len,
-            max_neighbors_per_hop=args.max_neighbors_per_hop,
-            max_hops=args.max_hops,
-            seed=args.seed,
-            max_answer_tokens=args.max_answer_tokens,
-            prompt_layout=args.prompt_layout,
-            use_chat_template=args.use_chat_template,
-            prompt_format=args.prompt_format,
-            answer_label_style=args.answer_label_style,
-            include_neighbor_labels=args.include_neighbor_labels,
-            neighbor_label_format=args.neighbor_label_format,
-            max_samples=args.train_max_train_samples,
-            resample_strategy=args.train_resample_strategy,
-            boost_spec=args.train_boost_spec,
-        )
         K = len(class_first_token_ids)
-        train_counts = torch.zeros(K, dtype=torch.float64)
-        for s in train_dataset_for_prior:
-            train_counts[int(s["cls_label"])] += 1.0
-        test_counts = torch.zeros(K, dtype=torch.float64)
-        for s in test_dataset:
-            test_counts[int(s["cls_label"])] += 1.0
-        eps = 1.0  # Laplace smoothing
-        train_probs = (train_counts + eps) / (train_counts.sum() + eps * K)
-        test_probs = (test_counts + eps) / (test_counts.sum() + eps * K)
-        log_train_prior = torch.log(train_probs)
-        log_test_prior = torch.log(test_probs)
-        # Subtracting this from logits applies the boost-correction + test-prior re-injection.
-        log_prior = (log_train_prior - log_test_prior).to(device=device, dtype=torch.float32)
-        logger.info("Train top-5 classes: %s",
-                    [(int(i), class_names[int(i)], int(c)) for i, c in sorted(enumerate(train_counts.tolist()), key=lambda x: -x[1])[:5]])
-        logger.info("Test  top-5 classes: %s",
-                    [(int(i), class_names[int(i)], int(c)) for i, c in sorted(enumerate(test_counts.tolist()), key=lambda x: -x[1])[:5]])
-        logger.info("Calibration shift (log p_train - log p_test) min=%.3f max=%.3f range=%.3f",
-                    log_prior.min().item(), log_prior.max().item(), (log_prior.max()-log_prior.min()).item())
+        # Only rank 0 loads the train split + counts test labels; all other ranks
+        # wait on broadcast. This avoids 8x the train cache build cost and matches
+        # the prior LP/NC eval convention (calibration is deterministic given the
+        # same seed/spec, so rank 0 computing it is correct).
+        log_prior_tensor = torch.zeros(K, device=device, dtype=torch.float32)
+        if rank == 0:
+            logger.info("Loading train split for class prior calibration (resample=%s, boost=%s, max_train_samples=%d)...",
+                        args.train_resample_strategy, args.train_boost_spec, args.train_max_train_samples)
+            train_dataset_for_prior = load_tag_dataset(
+                args.dataset_name,
+                tokenizer=tokenizer,
+                split="train",
+                max_seq_len=args.max_seq_len,
+                max_neighbors_per_hop=args.max_neighbors_per_hop,
+                max_hops=args.max_hops,
+                seed=args.seed,
+                max_answer_tokens=args.max_answer_tokens,
+                prompt_layout=args.prompt_layout,
+                use_chat_template=args.use_chat_template,
+                prompt_format=args.prompt_format,
+                answer_label_style=args.answer_label_style,
+                include_neighbor_labels=args.include_neighbor_labels,
+                neighbor_label_format=args.neighbor_label_format,
+                max_samples=args.train_max_train_samples,
+                resample_strategy=args.train_resample_strategy,
+                boost_spec=args.train_boost_spec,
+            )
+            train_counts = torch.zeros(K, dtype=torch.float64)
+            for s in train_dataset_for_prior:
+                train_counts[int(s["cls_label"])] += 1.0
+            test_counts = torch.zeros(K, dtype=torch.float64)
+            for s in test_dataset:
+                test_counts[int(s["cls_label"])] += 1.0
+            eps = 1.0  # Laplace smoothing
+            train_probs = (train_counts + eps) / (train_counts.sum() + eps * K)
+            test_probs = (test_counts + eps) / (test_counts.sum() + eps * K)
+            log_train_prior = torch.log(train_probs)
+            log_test_prior = torch.log(test_probs)
+            # Subtracting this from logits applies the boost-correction + test-prior re-injection.
+            log_prior_tensor = (log_train_prior - log_test_prior).to(device=device, dtype=torch.float32)
+            logger.info("Train top-5 classes: %s",
+                        [(int(i), class_names[int(i)], int(c)) for i, c in sorted(enumerate(train_counts.tolist()), key=lambda x: -x[1])[:5]])
+            logger.info("Test  top-5 classes: %s",
+                        [(int(i), class_names[int(i)], int(c)) for i, c in sorted(enumerate(test_counts.tolist()), key=lambda x: -x[1])[:5]])
+            logger.info("Calibration shift (log p_train - log p_test) min=%.3f max=%.3f range=%.3f",
+                        log_prior_tensor.min().item(), log_prior_tensor.max().item(), (log_prior_tensor.max()-log_prior_tensor.min()).item())
+        if world_size > 1:
+            dist.broadcast(log_prior_tensor, src=0)
+        log_prior = log_prior_tensor
+
+    # DDP shard of the test set for evaluation. The full test_dataset is still
+    # used above (rank 0) for the test-prior counts; here we wrap a strided
+    # subset so each rank only forwards its slice.
+    if world_size > 1:
+        shard_indices = list(range(rank, len(test_dataset), world_size))
+        test_dataset_local = torch.utils.data.Subset(test_dataset, shard_indices)
+        logger.info("[rank %d/%d] Evaluating shard: %d / %d samples",
+                    rank, world_size, len(test_dataset_local), len(test_dataset))
+    else:
+        test_dataset_local = test_dataset
 
     # Run evaluation
     t_start = time.time()
@@ -609,7 +652,7 @@ def main():
         model=model,
         tokenizer=tokenizer,
         class_names=class_names,
-        test_dataset=test_dataset,
+        test_dataset=test_dataset_local,
         class_first_token_ids=class_first_token_ids,
         batch_size=args.batch_size,
         use_topology_mask=args.use_topology_mask,
@@ -621,13 +664,37 @@ def main():
         dump_scores=args.dump_logits_path is not None,
         dump_per_position=args.dump_per_position,
     )
-    accuracy = eval_out["accuracy"]
-    accuracy_cal = eval_out["accuracy_calibrated"]
     per_class_correct = eval_out["per_class_correct"]
     per_class_correct_cal = eval_out["per_class_correct_calibrated"]
     per_class_total = eval_out["per_class_total"]
     predictions = eval_out["predictions"]
     elapsed = time.time() - t_start
+
+    # Aggregate per-class counts across DDP ranks. evaluate_layer0 returns local
+    # counts (its `accuracy` is local-shard accuracy and is recomputed below
+    # from globally-reduced counts).
+    K = len(class_first_token_ids)
+    if world_size > 1:
+        pcc = torch.tensor(
+            [per_class_correct[i] for i in range(K)], device=device, dtype=torch.long
+        )
+        pcc_cal = torch.tensor(
+            [per_class_correct_cal[i] for i in range(K)], device=device, dtype=torch.long
+        )
+        pct = torch.tensor(
+            [per_class_total[i] for i in range(K)], device=device, dtype=torch.long
+        )
+        dist.all_reduce(pcc)
+        dist.all_reduce(pcc_cal)
+        dist.all_reduce(pct)
+        per_class_correct = {i: int(pcc[i].item()) for i in range(K)}
+        per_class_correct_cal = {i: int(pcc_cal[i].item()) for i in range(K)}
+        per_class_total = {i: int(pct[i].item()) for i in range(K)}
+    total_correct = sum(per_class_correct.values())
+    total_correct_cal = sum(per_class_correct_cal.values())
+    total_count = sum(per_class_total.values())
+    accuracy = 100.0 * total_correct / total_count if total_count > 0 else 0.0
+    accuracy_cal = 100.0 * total_correct_cal / total_count if total_count > 0 else 0.0
 
     # Log results
     logger.info("=" * 60)
@@ -663,6 +730,15 @@ def main():
                 i, name,
                 100.0 * c / t if t > 0 else 0, c, t,
             )
+
+    # Only rank 0 writes the jsonl / npz (counts above are already globally
+    # reduced, so rank 0's view is the same as every rank's). Other ranks
+    # synchronize before exit so the process group tears down cleanly.
+    if rank != 0:
+        if world_size > 1:
+            dist.barrier()
+            dist.destroy_process_group()
+        return
 
     # Save to log file
     os.makedirs(os.path.dirname(args.log_file), exist_ok=True)
@@ -734,6 +810,10 @@ def main():
             npz_payload["per_pos_logprobs"] = eval_out["per_pos_logprobs"]
         np.savez(args.dump_logits_path, **npz_payload)
         logger.info("Dumped logits to %s (scores shape=%s)", args.dump_logits_path, eval_out["scores"].shape)
+
+    if world_size > 1:
+        dist.barrier()
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
