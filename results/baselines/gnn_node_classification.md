@@ -1,0 +1,98 @@
+# GNN Baselines
+
+Included source files:
+- `run_gnn.py`
+- `model.py`
+- `__init__.py`
+- `requirements.txt`
+
+Not copied:
+- `__pycache__/`
+- `data/`
+- `result/`
+- any other generated or cached files
+
+# Results
+Cora dataset: 
+| Rank | Model | Best test acc | Corresponding val acc | lr | layers | best epoch |
+|---:|---|---:|---:|---:|---:|---:|
+| 1 | GCN | 89.48% | 89.85% | 1e-4 | 3 | 359 |
+| 2 | GAT | 88.93% | 90.04% | 5e-4 | 3 | 40 |
+| 3 | MixHop | 88.75% | 89.67% | 5e-3 | 2 | 20 |
+| 4 | DifFormer | 88.56% | 88.01% | 5e-4 | 2 | 197 |
+| 4 | GATv2 | 88.56% | 89.67% | 5e-4 | 3 | 86 |
+| 4 | NodeFormer | 88.56% | 90.59% | 1e-3 | 3 | 296 |
+| 7 | GraphTransformer | 88.01% | 90.22% | 5e-3 | 2 | 10 |
+| 8 | SAGE | 87.82% | 90.22% | 1e-2 | 2 | 58 |
+| 9 | SGFormer | 87.64% | 87.82% | 1e-3 | 4 | 58 |
+
+* 10: GIN | 0.8635 | 0.8893 | 
+
+Pubmed dataset:
+| Rank | Model | Best test acc | Corresponding val acc | lr | layers | best epoch |
+|---:|---|---:|---:|---:|---:|---:|
+| 1 | MixHop | 90.04% | 89.55% | 1e-3 | 3 | 87 |
+| 2 | SAGE | 89.68% | 88.28% | 5e-4 | 4 | 39 |
+| 3 | GraphTransformer | 89.58% | 88.59% | 1e-2 | 4 | 34 |
+| 4 | DifFormer | 89.25% | 88.59% | 1e-2 | 2 | 120 |
+| 5 | GCN | 88.82% | 88.97% | 5e-3 | 2 | 213 |
+| 6 | GATv2 | 88.36% | 88.33% | 1e-2 | 2 | 110 |
+| 8 | GAT | 87.91% | 88.00% | 1e-3 | 2 | 217 |
+| 9 | SGFormer | 87.73% | 87.75% | 5e-3 | 2 | 561 |
+| 10 | NodeFormer | 86.46% | 87.14% | 1e-3 | 3 | 976 |
+
+* 7: GIN | 0.8829 | 0.8859 | 
+
+
+## Supported Models
+Because our improvements lean toward transformer-style designs, this adds comparisons with representative graph transformer architectures (best on PubMed is around 90%).
+- `gcn`
+- `sage`
+- `gat`
+- `gatv2`
+- `graphtransformer`
+- `nodeformer`
+- `difformer`
+- `sgformer`
+
+TODO: 
+- Full baseline result table.
+- GNN&GT+LLM embedding.
+
+## Example Commands
+
+Run with LLaGA processed data:
+
+```bash
+python run_gnn.py \
+  --dataset cora \
+  --model gcn \
+  --llaga_dataset_root "xxx" \
+  --result_dir "xxx"
+```
+
+Run GATv2 on a specific GPU:
+
+```bash
+cd /home/bei4/exper/dlm-graph/baselines/llaga_gnn
+
+python run_gnn.py \
+  --dataset pubmed \
+  --model gatv2 \
+  --gpu 0 \
+  --llaga_dataset_root "xxx" \
+  --result_dir "xxx"
+```
+
+Run with official Planetoid data:
+
+```bash
+cd /home/bei4/exper/dlm-graph/baselines/llaga_gnn
+
+python run_gnn.py \
+  --source planetoid \
+  --dataset cora \
+  --model sage \
+  --data_root "xxx" \
+  --result_dir "xxx"
+```
