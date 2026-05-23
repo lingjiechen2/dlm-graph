@@ -35,6 +35,18 @@ if int(os.environ.get("WORLD_SIZE", "1")) > 1:
             timeout=timedelta(seconds=int(os.environ.get("DDP_INIT_TIMEOUT", "3600"))),
         )
 
+# Disable cuDNN's fused MHA backend for F.scaled_dot_product_attention.
+# torch 2.11+cu128's cuDNN MHA hits an internal "mha_graph.execute().is_good() == false"
+# assertion on some arxiv NC attention shape combinations (verified 2026-05-22:
+# job 1675670 crashed at step ~975/6399). Falling back to FlashAttention /
+# memory-efficient SDPA is ~5-15% slower per step but stable. LP runs didn't trigger
+# this; NC's variable-length neighbor patterns + answer-token masking did.
+try:
+    import torch as _torch_for_sdp
+    _torch_for_sdp.backends.cuda.enable_cudnn_sdp(False)
+except Exception:
+    pass
+
 import accelerate
 import transformers
 

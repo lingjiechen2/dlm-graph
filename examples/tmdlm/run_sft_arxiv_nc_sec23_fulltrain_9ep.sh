@@ -107,6 +107,7 @@ srun --nodes=${NNODES} --ntasks=${NNODES} --ntasks-per-node=1 \
         --gradient_checkpointing True \
         --save_steps 0.1 \
         --save_only_model True \
+        --cls_loss_weight 0.0 \
         --eval_strategy no \
         --report_to none \
         --run_name '${run_name}' \
