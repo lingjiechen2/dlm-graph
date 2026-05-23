@@ -4,6 +4,7 @@ This directory is the central index for result documentation.
 
 ## Current Method Results
 
+- [All baselines and current results](all_results_table.md): consolidated comparison table across NC and LP.
 - [Current results summary](current_results_summary.md): compact scorecard and takeaways.
 - [Current results detailed](current_results_detailed.md): full experiment ledger for the current TM-DLM NC and LP runs.
 

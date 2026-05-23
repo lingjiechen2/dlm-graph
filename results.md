@@ -3,6 +3,7 @@
 The result documentation has moved to [results/](results/).
 
 - Current summary: [results/current_results_summary.md](results/current_results_summary.md)
+- All baselines and current results: [results/all_results_table.md](results/all_results_table.md)
 - Current detailed ledger: [results/current_results_detailed.md](results/current_results_detailed.md)
 - Baseline result tables: [results/baselines/](results/baselines/)
 

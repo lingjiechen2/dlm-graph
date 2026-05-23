@@ -46,5 +46,6 @@ Main takeaways:
 
 ## Related Files
 
+- Consolidated baseline comparison: [all_results_table.md](all_results_table.md)
 - Full current ledger: [current_results_detailed.md](current_results_detailed.md)
 - Baseline result index: [README.md](README.md#baseline-results)
