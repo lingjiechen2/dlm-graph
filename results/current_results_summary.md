@@ -44,8 +44,33 @@ Main takeaways:
 - The definitive Cora LP result is the LLaGA-split run, not the earlier seed-42 split run, because the latter had split overlap with LLaGA test positives.
 - Full-data arxiv LP training is needed to clear LLaGA-HO; the 10 percent data version already beats LLaGA-ND but does not clear HO.
 
+## Frozen / Selected LP Reference
+
+| Dataset | Reference accuracy | Current SFT best | Lift |
+|---|---:|---:|---:|
+| Cora | 85.88* | 91.62 | +5.74 |
+| PubMed | 90.89* | 95.31 | +4.42 |
+| ogbn-arxiv | 95.25* | 96.55 | +1.30 |
+
+`*` Selected LP references use no-topo SFT evals: Cora `checkpoint-final` 85.88 / AUC 0.9574; PubMed `checkpoint-final` 90.89 / AUC 0.9889; ogbn-arxiv `checkpoint-712` 95.25 / AUC 0.9925. Full frozen zero-shot details: [frozen_llada_lp_results.md](frozen_llada_lp_results.md).
+
+## LP Cross-Dataset Transfer
+
+Topo final-checkpoint LP adapters transfer strongly across datasets, with all
+off-diagonal accuracies above 88%.
+
+| Train/source | Cora target | PubMed target | ogbn-arxiv target |
+|---|---:|---:|---:|
+| Cora topo final | -- | 92.34 | 93.54 |
+| PubMed topo final | 88.82 | -- | 94.51 |
+| ogbn-arxiv topo final | 90.44 | 94.08 | -- |
+
+Full accuracy/AUC details: [lp_cross_dataset_topo_results.md](lp_cross_dataset_topo_results.md).
+
 ## Related Files
 
 - Consolidated baseline comparison: [all_results_table.md](all_results_table.md)
+- Frozen LLaDA LP baseline: [frozen_llada_lp_results.md](frozen_llada_lp_results.md)
+- LP cross-dataset transfer: [lp_cross_dataset_topo_results.md](lp_cross_dataset_topo_results.md)
 - Full current ledger: [current_results_detailed.md](current_results_detailed.md)
 - Baseline result index: [README.md](README.md#baseline-results)

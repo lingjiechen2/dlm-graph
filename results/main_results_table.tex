@@ -1,0 +1,43 @@
+\begin{table*}[!t]
+  \centering
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{lcccccc}
+    \toprule
+    & \multicolumn{3}{c}{Node classification} & \multicolumn{3}{c}{Link prediction} \\
+    \cmidrule(lr){2-4}\cmidrule(lr){5-7}
+    & Cora & PubMed & ogbn-arxiv & Cora & PubMed & ogbn-arxiv \\
+    \midrule
+    \multicolumn{7}{l}{\textit{Graph neural networks}} \\
+    GCN              & 89.48 & 93.56 & 74.25 & \underline{87.79} & 89.12 & \underline{94.67} \\
+    GraphSAGE        & 88.93 & 94.93 & 75.76 & 85.00 & 84.30 & 90.61 \\
+    GAT              & 88.93 & 92.24 & 73.80 & 86.91 & 87.59 & 91.93 \\
+    GATv2            & 89.11 & 94.68 & 76.02 & 85.59 & 86.90 & 92.02 \\
+    GIN              & 88.01 & 93.59 & 70.89 & 81.18 & 80.35 & 81.79 \\
+    MixHop           & 88.75 & 95.23 & 76.01 & 84.26 & 89.21 & 92.53 \\
+    \midrule
+    \multicolumn{7}{l}{\textit{Graph transformers}} \\
+    GraphTransformer & 88.01 & 95.03 & 76.12 & 82.79 & 86.62 & 93.43 \\
+    NodeFormer       & \underline{89.67} & 95.16 & \underline{76.63} & 80.00 & 87.50 & 92.73 \\
+    DIFFormer        & 88.56 & 95.03 & 76.29 & 79.85 & 81.67 & 92.93 \\
+    SGFormer         & 87.64 & \underline{95.28} & 76.08 & 85.44 & 89.74 & 93.32 \\
+    \midrule
+    \multicolumn{7}{l}{\textit{Language-model baselines}} \\
+    RoBERTa          & 83.17 & -- & -- & -- & -- & -- \\
+    LLaGA            & 89.22 & 95.03 & \textbf{76.66} & 86.82 & \underline{91.41} & 94.15 \\
+    Frozen LLaDA-8B  & 57.01 & 87.15 & 37.58 & 85.88\textsuperscript{\dagger} & 90.89\textsuperscript{\dagger} & 95.25\textsuperscript{\dagger} \\
+    \midrule
+    \method (ours)   & \textbf{90.96} & \textbf{96.30} & 76.39 & \textbf{91.62} & \textbf{95.31} & \textbf{96.55} \\
+    \bottomrule
+  \end{tabular}
+  \caption{Accuracy (\%) on node classification and link prediction across
+    the three \TAG benchmarks. Best in \textbf{bold}, second-best
+    \underline{underlined}. For node classification, GNN and graph-transformer
+    entries report the best recorded local result per model from the baseline
+    logs; for link prediction, they report test accuracy from the local LP
+    baseline table. Missing entries indicate that no comparable result is
+    currently recorded. \textsuperscript{\dagger}For link prediction, these
+    entries use selected no-topo SFT scores from the 2026-05-23 evals:
+    Cora/PubMed checkpoint-final and ogbn-arxiv checkpoint-712.}
+  \label{tab:main-results}
+\end{table*}

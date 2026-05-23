@@ -857,3 +857,31 @@ Per-checkpoint eval (JSONL: `~/model/dlm-graph/logs/eval_arxiv_lp_llaga_per_ckpt
 | final | 96.44        | 0.9941       |
 
 Best **96.55 @ ckpt-2492**, **+2.40 pt vs LLaGA-HO 94.15 ✅ SOTA**. The 10%-data version (peak 94.86) already exceeds LLaGA-ND 91.24 by +3.62 pt but tracks behind LLaGA-HO; full-data training is required to clear LLaGA-HO 94.15.
+
+<!-- frozen-llada-lp-start -->
+## Frozen LLaDA-8B-Instruct LP Eval (LLaGA Splits)
+
+Zero-shot baseline using the untrained/non-SFT `GSAI-ML/LLaDA-8B-Instruct` model on the official LLaGA LP test splits. The prompt/eval setup matches the LP head-to-head eval: `max_seq_len=4096`, 2-hop neighborhoods, 10 neighbors per hop, sequential positions, and topology mask enabled.
+
+| Dataset | Samples | Accuracy | AUC | Per-label acc (no / yes) |
+|---|---:|---:|---:|---|
+| Cora | 680 | 52.65 | 0.5209 | 69.66 / 31.23 |
+| PubMed | 5368 | 51.12 | 0.4789 | 92.52 / 9.19 |
+| ogbn-arxiv | 80086 | 46.99 | 0.4875 | 25.69 / 71.65 |
+
+JSONL: `/mnt/weka/home/lingjie.chen/model/dlm-graph/logs/eval_frozen_llada_lp_llaga.jsonl`
+
+<!-- frozen-llada-lp-end -->
+
+## LP Cross-Dataset Transfer (Topo Final Checkpoints)
+
+Final topology-masked LP adapters were evaluated off-diagonal on the official
+LLaGA LP test splits. Accuracy / AUC matrix:
+
+| Source checkpoint | Cora target | PubMed target | ogbn-arxiv target |
+|---|---:|---:|---:|
+| Cora topo final | -- | 92.34 / 0.9759 | 93.54 / 0.9832 |
+| PubMed topo final | 88.82 / 0.9580 | -- | 94.51 / 0.9886 |
+| ogbn-arxiv topo final | 90.44 / 0.9627 | 94.08 / 0.9848 | -- |
+
+Full run details: [lp_cross_dataset_topo_results.md](lp_cross_dataset_topo_results.md).
