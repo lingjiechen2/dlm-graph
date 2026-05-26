@@ -18,6 +18,7 @@ class ModelArguments:
     lora: bool = False
     target_modules: str = "all-linear"
     r: int = 32
+    lora_r: int = None
     lora_alpha: int = 64
     lora_dropout: float = 0.05
     bias: str = "none"
@@ -27,6 +28,8 @@ class ModelArguments:
         self.model_name_or_path = resolve_with_base_env(
             self.model_name_or_path, "BASE_MODELS_DIR"
         )
+        if self.lora_r is not None:
+            self.r = self.lora_r
 
 
 @dataclass

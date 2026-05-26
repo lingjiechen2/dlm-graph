@@ -37,6 +37,7 @@ Frozen LLaDA details: [frozen_llada_lp_results.md](frozen_llada_lp_results.md).
 ## Source Files
 
 - Current method results: [current_results_summary.md](current_results_summary.md), [current_results_detailed.md](current_results_detailed.md)
+- Neighbor sweep results: [neighbor_sweep_results.md](neighbor_sweep_results.md)
 - Frozen LLaDA LP baseline: [frozen_llada_lp_results.md](frozen_llada_lp_results.md)
 - LP cross-dataset transfer: [lp_cross_dataset_topo_results.md](lp_cross_dataset_topo_results.md)
 - Local NC baselines: [baselines/simteg_node_classification.md](baselines/simteg_node_classification.md)

@@ -44,6 +44,7 @@ class EvalLPLogitArgs:
     max_neighbors_per_hop: int = field(default=10)
     max_hops: int = field(default=2)
     use_topology_mask: bool = field(default=False)
+    topology_mask_type: str = field(default="star")
     log_file: str = field(default="experiments/experiment_log.jsonl")
     lora_path: str | None = field(default=None)
     position_id_type: str = field(default="sequential")
@@ -60,6 +61,7 @@ def evaluate_lp(
     yesno_token_ids,
     batch_size: int = 8,
     use_topology_mask: bool = False,
+    topology_mask_type: str = "star",
     position_id_type: str = "sequential",
 ):
     """Returns (accuracy, auc, per_label_acc dict, n_samples, all_probs, all_gt)."""
@@ -72,6 +74,7 @@ def evaluate_lp(
         padding=True,
         return_tensors="pt",
         position_id_type=position_id_type,
+        topology_mask_type=topology_mask_type,
     )
     dataloader = torch.utils.data.DataLoader(
         test_dataset, batch_size=batch_size, shuffle=False, collate_fn=collator
@@ -196,6 +199,7 @@ def main():
         seed=args.seed,
         neg_ratio=args.lp_neg_ratio,
         max_samples=args.max_samples,
+        include_topology_edges=(args.topology_mask_type == "khop_tree"),
     )
     logger.info("Loaded %d LP samples", len(test_dataset))
 
@@ -220,6 +224,7 @@ def main():
         yesno_token_ids=yesno_ids,
         batch_size=args.batch_size,
         use_topology_mask=args.use_topology_mask,
+        topology_mask_type=args.topology_mask_type,
         position_id_type=args.position_id_type,
     )
     elapsed = time.time() - t_start
@@ -253,6 +258,7 @@ def main():
             "max_neighbors_per_hop": args.max_neighbors_per_hop,
             "max_hops": args.max_hops,
             "use_topology_mask": args.use_topology_mask,
+            "topology_mask_type": args.topology_mask_type,
             "lora_path": args.lora_path,
             "lp_neg_ratio": args.lp_neg_ratio,
             "seed": args.seed,

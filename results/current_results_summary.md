@@ -30,6 +30,9 @@ Main takeaways:
 - Increasing PubMed context to `max_seq_len=4096` lifts the peak to 96.30 and is the clearest case where topology masking beats dense attention.
 - ogbn-arxiv NC is the only task not above LLaGA-HO; full-train 3-epoch r=128 reaches 76.39, only 0.27 points short.
 
+Full NC in-domain, replication, and cross-dataset transfer details:
+[nc_experiment_results.md](nc_experiment_results.md).
+
 ## Link Prediction
 
 | Dataset | Best current result | Main comparison |
@@ -67,10 +70,20 @@ off-diagonal accuracies above 88%.
 
 Full accuracy/AUC details: [lp_cross_dataset_topo_results.md](lp_cross_dataset_topo_results.md).
 
+## Neighbor Sweep
+
+The star-topology neighbor-count sweep over `nb={0,1,3,5,10,20}` is complete
+for Cora, PubMed, and ogbn-arxiv NC/LP. The previous post-training eval default
+used `max_neighbors_per_hop=10`, which remains best for 5 of 6 rows; Cora NC
+peaks at `nb=3`.
+
+Full sweep table: [neighbor_sweep_results.md](neighbor_sweep_results.md).
+
 ## Related Files
 
 - Consolidated baseline comparison: [all_results_table.md](all_results_table.md)
 - Frozen LLaDA LP baseline: [frozen_llada_lp_results.md](frozen_llada_lp_results.md)
 - LP cross-dataset transfer: [lp_cross_dataset_topo_results.md](lp_cross_dataset_topo_results.md)
+- Neighbor sweep results: [neighbor_sweep_results.md](neighbor_sweep_results.md)
 - Full current ledger: [current_results_detailed.md](current_results_detailed.md)
 - Baseline result index: [README.md](README.md#baseline-results)

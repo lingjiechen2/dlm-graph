@@ -36,6 +36,7 @@ from dllm.data.graph import (
     build_edge_sample,
     get_lp_yesno_token_ids,
     _sample_lp_neighbors,
+    _sample_lp_neighbors_with_edges,
     _truncate_text_for_neighbor,
 )
 from dllm.data.datasets._common import build_adjacency, load_llaga_processed_data
@@ -62,6 +63,7 @@ class EvalArgs:
     max_neighbors_per_hop: int = field(default=10)
     max_hops: int = field(default=2)
     use_topology_mask: bool = field(default=False)
+    topology_mask_type: str = field(default="star")
     position_id_type: str = field(default="sequential")
     seed: int = field(default=42)
     log_file: str = field(default=".models/eval_logs/lp_llaga_split.jsonl")
@@ -122,6 +124,7 @@ def _build_samples(
     max_hops: int,
     seed: int,
     max_samples: int,
+    include_topology_edges: bool = False,
     shard_rank: int = 0,
     shard_world: int = 1,
 ) -> list[dict]:
@@ -139,9 +142,23 @@ def _build_samples(
     for (u, v), label in pairs:
         if u not in node_data or v not in node_data:
             continue
-        u_nb_ids, u_nb_hops, v_nb_ids, v_nb_hops = _sample_lp_neighbors(
-            adj_train, u, v, max_neighbors_per_hop, max_hops, rng
-        )
+        if include_topology_edges:
+            (
+                u_nb_ids,
+                u_nb_hops,
+                u_nb_edges,
+                v_nb_ids,
+                v_nb_hops,
+                v_nb_edges,
+            ) = _sample_lp_neighbors_with_edges(
+                adj_train, u, v, max_neighbors_per_hop, max_hops, rng
+            )
+        else:
+            u_nb_ids, u_nb_hops, v_nb_ids, v_nb_hops = _sample_lp_neighbors(
+                adj_train, u, v, max_neighbors_per_hop, max_hops, rng
+            )
+            u_nb_edges = None
+            v_nb_edges = None
         sample = build_edge_sample(
             u_text=_truncate_text_for_neighbor(node_data, u),
             v_text=_truncate_text_for_neighbor(node_data, v),
@@ -152,6 +169,8 @@ def _build_samples(
             cls_label=label,
             tokenizer=tokenizer,
             max_seq_len=max_seq_len,
+            u_neighbor_edges=u_nb_edges,
+            v_neighbor_edges=v_nb_edges,
         )
         sample["edge"] = (int(u), int(v))
         samples.append(sample)
@@ -169,6 +188,7 @@ def evaluate(model, tokenizer, dataset, yesno_ids, args: EvalArgs):
         padding=True,
         return_tensors="pt",
         position_id_type=args.position_id_type,
+        topology_mask_type=args.topology_mask_type,
     )
     loader = torch.utils.data.DataLoader(
         dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collator
@@ -291,6 +311,7 @@ def main():
         pos_edges, neg_edges, node_data, adj_train, tokenizer,
         args.max_seq_len, args.max_neighbors_per_hop, args.max_hops,
         args.seed, args.max_samples,
+        include_topology_edges=(args.topology_mask_type == "khop_tree"),
         shard_rank=rank, shard_world=world_size,
     )
     logger.info("[rank %d/%d] Built %d local samples", rank, world_size, len(dataset))
@@ -362,6 +383,7 @@ def main():
             "max_neighbors_per_hop": args.max_neighbors_per_hop,
             "max_hops": args.max_hops,
             "use_topology_mask": args.use_topology_mask,
+            "topology_mask_type": args.topology_mask_type,
             "batch_size": args.batch_size,
             "seed": args.seed,
             "world_size": world_size,

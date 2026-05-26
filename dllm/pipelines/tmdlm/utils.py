@@ -36,6 +36,7 @@ class GraphDataCollator:
     label_pad_token_id: int = -100
     position_id_type: str = "sequential"  # "sequential" (default) or "topological"
     use_topology_mask: bool = True  # False → fall back to dense padding-only attention
+    topology_mask_type: str = "star"  # "star" (default) or "khop_tree"
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
         b = len(features)
@@ -179,6 +180,10 @@ class GraphDataCollator:
                 mask[i, :seq_len, :seq_len] = 1
                 continue
 
+            if self.topology_mask_type == "khop_tree" and "node_edges" in f:
+                self._fill_edge_mask(mask[i], spans, f["node_edges"])
+                continue
+
             if roles is not None:
                 self._fill_lp_mask(mask[i], spans, roles)
                 continue
@@ -241,3 +246,22 @@ class GraphDataCollator:
         _fill(q_spans, target_spans)
         for s in q_spans:
             sample_mask[s[0]:s[1], s[0]:s[1]] = 1
+
+    @staticmethod
+    def _fill_edge_mask(
+        sample_mask: torch.Tensor,
+        spans: list,
+        node_edges: list,
+    ) -> None:
+        """Populate one [L, L] mask slice from undirected span-level edges."""
+        for s, e in spans:
+            sample_mask[s:e, s:e] = 1
+        for a, b in node_edges:
+            a = int(a)
+            b = int(b)
+            if a >= len(spans) or b >= len(spans):
+                continue
+            a0, a1 = spans[a]
+            b0, b1 = spans[b]
+            sample_mask[a0:a1, b0:b1] = 1
+            sample_mask[b0:b1, a0:a1] = 1

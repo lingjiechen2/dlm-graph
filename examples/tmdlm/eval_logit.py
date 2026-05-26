@@ -23,6 +23,7 @@ Multi-token (mean log-prob):
 
 import json
 import os
+import random
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -34,10 +35,34 @@ import transformers
 from tqdm import tqdm
 
 import dllm
-from dllm.data.graph import load_tag_dataset, get_class_token_ids
+from dllm.data.datasets import LOADERS as TAG_DATA_LOADERS
+from dllm.data.graph import DATASET_CONFIGS, load_tag_dataset, get_class_token_ids
 from dllm.pipelines.tmdlm.utils import GraphDataCollator
 
 logger = dllm.utils.get_default_logger(__name__)
+
+
+def _raw_split_class_counts(
+    dataset_name,
+    split,
+    seed,
+    num_classes,
+    max_samples=0,
+):
+    if isinstance(dataset_name, (list, tuple)):
+        raise ValueError("raw prior counts only support a single dataset")
+    if dataset_name not in DATASET_CONFIGS or dataset_name not in TAG_DATA_LOADERS:
+        raise ValueError(f"unknown dataset for raw prior counts: {dataset_name}")
+    node_data, _adj, _class_names, split_ids = TAG_DATA_LOADERS[dataset_name](
+        DATASET_CONFIGS[dataset_name], split, seed
+    )
+    if max_samples and max_samples > 0:
+        rng = random.Random(seed)
+        split_ids = rng.sample(list(split_ids), min(max_samples, len(split_ids)))
+    counts = torch.zeros(num_classes, dtype=torch.float64)
+    for node_id in split_ids:
+        counts[int(node_data[int(node_id)]["label"])] += 1.0
+    return counts
 
 
 def _valid_class_token_lists(class_token_ids, tokenizer):
@@ -130,6 +155,10 @@ class EvalLogitArgs:
     max_hops: int = field(default=2)
     use_topology_mask: bool = field(
         default=False, metadata={"help": "Apply topology mask to attention"}
+    )
+    topology_mask_type: str = field(
+        default="star",
+        metadata={"help": "Topology mask type: star | khop_tree"},
     )
     log_file: str = field(default="experiments/experiment_log.jsonl")
     lora_path: str | None = field(
@@ -236,6 +265,7 @@ def evaluate_layer0(
     class_first_token_ids,
     batch_size=8,
     use_topology_mask=False,
+    topology_mask_type="star",
     position_id_type="sequential",
     max_answer_tokens=1,
     dataset_name="cora",
@@ -243,6 +273,7 @@ def evaluate_layer0(
     log_prior=None,
     dump_scores=False,
     dump_per_position=False,
+    show_progress=True,
 ):
     """
     Layer 0 evaluation: frozen model, mask answer tokens, single forward pass,
@@ -269,6 +300,7 @@ def evaluate_layer0(
         padding=True,
         return_tensors="pt",
         position_id_type=position_id_type,
+        topology_mask_type=topology_mask_type,
     )
     dataloader = torch.utils.data.DataLoader(
         test_dataset,
@@ -289,7 +321,7 @@ def evaluate_layer0(
     all_per_pos = [] if (dump_scores and dump_per_position) else None  # list of [b, max_ans_len, K]
     all_cls_labels = [] if dump_scores else None
 
-    pbar = tqdm(dataloader, desc="Evaluating")
+    pbar = tqdm(dataloader, desc="Evaluating", disable=not show_progress)
     for batch in pbar:
         batch = {
             k: v.to(device) if isinstance(v, torch.Tensor) else v
@@ -560,6 +592,7 @@ def main():
         neighbor_label_format=args.neighbor_label_format,
         max_samples=args.max_samples,
         neighbor_seed=args.neighbor_seed if args.neighbor_seed >= 0 else None,
+        include_topology_edges=(args.topology_mask_type == "khop_tree"),
     )
     logger.info("Loaded %d samples", len(test_dataset))
 
@@ -585,14 +618,19 @@ def main():
     log_prior = None
     if args.apply_class_prior_calibration:
         K = len(class_first_token_ids)
-        # Only rank 0 loads the train split + counts test labels; all other ranks
-        # wait on broadcast. This avoids 8x the train cache build cost and matches
-        # the prior LP/NC eval convention (calibration is deterministic given the
-        # same seed/spec, so rank 0 computing it is correct).
         log_prior_tensor = torch.zeros(K, device=device, dtype=torch.float32)
         if rank == 0:
             logger.info("Loading train split for class prior calibration (resample=%s, boost=%s, max_train_samples=%d)...",
                         args.train_resample_strategy, args.train_boost_spec, args.train_max_train_samples)
+        if args.train_resample_strategy == "none" and not args.train_boost_spec:
+            train_counts = _raw_split_class_counts(
+                args.dataset_name,
+                split="train",
+                seed=args.seed,
+                num_classes=K,
+                max_samples=args.train_max_train_samples,
+            )
+        else:
             train_dataset_for_prior = load_tag_dataset(
                 args.dataset_name,
                 tokenizer=tokenizer,
@@ -615,23 +653,24 @@ def main():
             train_counts = torch.zeros(K, dtype=torch.float64)
             for s in train_dataset_for_prior:
                 train_counts[int(s["cls_label"])] += 1.0
-            test_counts = torch.zeros(K, dtype=torch.float64)
-            for s in test_dataset:
-                test_counts[int(s["cls_label"])] += 1.0
-            eps = 1.0  # Laplace smoothing
-            train_probs = (train_counts + eps) / (train_counts.sum() + eps * K)
-            test_probs = (test_counts + eps) / (test_counts.sum() + eps * K)
-            log_train_prior = torch.log(train_probs)
-            log_test_prior = torch.log(test_probs)
-            # Subtracting this from logits applies the boost-correction + test-prior re-injection.
-            log_prior_tensor = (log_train_prior - log_test_prior).to(device=device, dtype=torch.float32)
+        test_counts = torch.zeros(K, dtype=torch.float64)
+        for s in test_dataset:
+            test_counts[int(s["cls_label"])] += 1.0
+        eps = 1.0  # Laplace smoothing
+        train_probs = (train_counts + eps) / (train_counts.sum() + eps * K)
+        test_probs = (test_counts + eps) / (test_counts.sum() + eps * K)
+        log_train_prior = torch.log(train_probs)
+        log_test_prior = torch.log(test_probs)
+        # Subtracting this from logits applies the boost-correction + test-prior re-injection.
+        log_prior_tensor = (log_train_prior - log_test_prior).to(device=device, dtype=torch.float32)
+        if rank == 0:
             logger.info("Train top-5 classes: %s",
                         [(int(i), class_names[int(i)], int(c)) for i, c in sorted(enumerate(train_counts.tolist()), key=lambda x: -x[1])[:5]])
             logger.info("Test  top-5 classes: %s",
                         [(int(i), class_names[int(i)], int(c)) for i, c in sorted(enumerate(test_counts.tolist()), key=lambda x: -x[1])[:5]])
             logger.info("Calibration shift (log p_train - log p_test) min=%.3f max=%.3f range=%.3f",
                         log_prior_tensor.min().item(), log_prior_tensor.max().item(), (log_prior_tensor.max()-log_prior_tensor.min()).item())
-        if world_size > 1:
+        if world_size > 1 and os.environ.get("DLM_BROADCAST_CLASS_PRIOR", "0") == "1":
             dist.broadcast(log_prior_tensor, src=0)
         log_prior = log_prior_tensor
 
@@ -656,6 +695,7 @@ def main():
         class_first_token_ids=class_first_token_ids,
         batch_size=args.batch_size,
         use_topology_mask=args.use_topology_mask,
+        topology_mask_type=args.topology_mask_type,
         position_id_type=args.position_id_type,
         max_answer_tokens=args.max_answer_tokens,
         dataset_name=args.dataset_name,
@@ -663,6 +703,7 @@ def main():
         log_prior=log_prior,
         dump_scores=args.dump_logits_path is not None,
         dump_per_position=args.dump_per_position,
+        show_progress=(rank == 0),
     )
     per_class_correct = eval_out["per_class_correct"]
     per_class_correct_cal = eval_out["per_class_correct_calibrated"]
@@ -776,6 +817,7 @@ def main():
             "max_neighbors_per_hop": args.max_neighbors_per_hop,
             "max_hops": args.max_hops,
             "use_topology_mask": args.use_topology_mask,
+            "topology_mask_type": args.topology_mask_type,
             "lora_path": args.lora_path,
             "prompt_layout": args.prompt_layout,
             "use_chat_template": args.use_chat_template,

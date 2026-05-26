@@ -249,6 +249,56 @@ def _sample_khop_neighbors(
     return neighbor_ids, neighbor_hops
 
 
+def _sample_khop_neighbors_with_edges(
+    adj: dict[int, list[int]],
+    node_id: int,
+    max_neighbors_per_hop: int,
+    max_hops: int,
+    rng: random.Random,
+) -> tuple[list[int], list[int], list[list[int]]]:
+    """Sample k-hop neighbors and keep span-level tree edges.
+
+    Edge endpoints use sample node indices: 0 is the target, and sampled
+    neighbors are 1..N in the returned order.
+    """
+    neighbor_ids = []
+    neighbor_hops = []
+    node_edges: list[list[int]] = []
+    seen = {node_id}
+
+    if max_hops < 1:
+        return neighbor_ids, neighbor_hops, node_edges
+
+    nb_1hop = list(set(adj.get(node_id, [])))
+    if len(nb_1hop) > max_neighbors_per_hop:
+        nb_1hop = rng.sample(nb_1hop, max_neighbors_per_hop)
+    parent_idx_by_node = {}
+    for nb in nb_1hop:
+        seen.add(nb)
+        neighbor_ids.append(nb)
+        neighbor_hops.append(1)
+        span_idx = len(neighbor_ids)
+        parent_idx_by_node[nb] = span_idx
+        node_edges.append([0, span_idx])
+
+    if max_hops >= 2:
+        candidates_2hop = []
+        for nb in nb_1hop:
+            parent_idx = parent_idx_by_node[nb]
+            for nb2 in adj.get(nb, []):
+                if nb2 not in seen:
+                    candidates_2hop.append((nb2, parent_idx))
+                    seen.add(nb2)
+        if len(candidates_2hop) > max_neighbors_per_hop:
+            candidates_2hop = rng.sample(candidates_2hop, max_neighbors_per_hop)
+        for nb2, parent_idx in candidates_2hop:
+            neighbor_ids.append(nb2)
+            neighbor_hops.append(2)
+            node_edges.append([parent_idx, len(neighbor_ids)])
+
+    return neighbor_ids, neighbor_hops, node_edges
+
+
 # ---------------------------------------------------------------------------
 # Prompt / sample construction
 # ---------------------------------------------------------------------------
@@ -1222,6 +1272,7 @@ def _build_tag_samples(
     include_options: bool = True,
     mask_neighbor_labels: bool = False,
     neighbor_seed: int | None = None,
+    include_topology_edges: bool = False,
 ) -> list[dict]:
     """Build TM-DLM samples for a list of node IDs (shared across all datasets).
 
@@ -1240,19 +1291,27 @@ def _build_tag_samples(
             continue
         info = node_data[node_id]
 
-        nb_ids, nb_hops = _sample_khop_neighbors(
-            adj, node_id, max_neighbors_per_hop, max_hops, rng
-        )
+        if include_topology_edges:
+            nb_ids, nb_hops, node_edges = _sample_khop_neighbors_with_edges(
+                adj, node_id, max_neighbors_per_hop, max_hops, rng
+            )
+        else:
+            nb_ids, nb_hops = _sample_khop_neighbors(
+                adj, node_id, max_neighbors_per_hop, max_hops, rng
+            )
+            node_edges = None
 
         neighbor_texts = []
         neighbor_hops = []
         neighbor_labels = []
-        for nb_id, hop in zip(nb_ids, nb_hops):
+        span_idx_map = {0: 0}
+        for sampled_idx, (nb_id, hop) in enumerate(zip(nb_ids, nb_hops), start=1):
             if nb_id in node_data:
                 nd = node_data[nb_id]
                 neighbor_texts.append(f"{nd['title']}. {nd['abstract']}")
                 neighbor_hops.append(hop)
                 neighbor_labels.append(nd.get("label"))
+                span_idx_map[sampled_idx] = len(neighbor_texts)
 
         target_text = f"{info['title']}. {info['abstract']}"
 
@@ -1280,6 +1339,13 @@ def _build_tag_samples(
             target_abstract=info.get("abstract"),
             target_label_text=class_names[info["label"]],
         )
+        if include_topology_edges and node_edges is not None:
+            n_spans = len(result.get("node_spans", []))
+            result["node_edges"] = [
+                [span_idx_map[a], span_idx_map[b]] for a, b in node_edges
+                if a in span_idx_map and b in span_idx_map
+                and span_idx_map[a] < n_spans and span_idx_map[b] < n_spans
+            ]
         samples.append(result)
 
     return samples
@@ -1310,6 +1376,7 @@ def _tag_dataset_cache_key(
     resample_strategy,
     boost_spec,
     neighbor_seed=None,
+    include_topology_edges=False,
 ) -> str:
     """Hash all args that affect sample content into a 16-hex cache key."""
     if isinstance(dataset_name, (list, tuple)):
@@ -1343,6 +1410,8 @@ def _tag_dataset_cache_key(
     }
     if neighbor_seed is not None:
         payload["neighbor_seed"] = int(neighbor_seed)
+    if include_topology_edges:
+        payload["include_topology_edges"] = True
     blob = json.dumps(payload, sort_keys=True).encode()
     return hashlib.sha1(blob).hexdigest()[:16]
 
@@ -1388,6 +1457,7 @@ def load_tag_dataset(
     resample_strategy: str = "none",
     boost_spec: str = "",
     neighbor_seed: int | None = None,
+    include_topology_edges: bool = False,
 ) -> Dataset:
     """
     Load a TAG dataset and return a HuggingFace Dataset of TM-DLM samples.
@@ -1435,6 +1505,7 @@ def load_tag_dataset(
         resample_strategy=resample_strategy,
         boost_spec=boost_spec,
         neighbor_seed=neighbor_seed,
+        include_topology_edges=include_topology_edges,
     )
     cache_dir = TAG_CACHE_ROOT / cache_key
     if (cache_dir / "dataset_info.json").exists():
@@ -1471,6 +1542,7 @@ def load_tag_dataset(
                 balance_merged=balance_merged,
                 resample_strategy="none",  # single dataset: skip merge-level strategies
                 boost_spec="",
+                include_topology_edges=include_topology_edges,
             )
         for n in names:
             if n not in DATASET_CONFIGS:
@@ -1493,6 +1565,7 @@ def load_tag_dataset(
                 neighbor_label_format=neighbor_label_format,
                 include_options=include_options,
                 mask_neighbor_labels=mask_neighbor_labels,
+                include_topology_edges=include_topology_edges,
             )
             for s in ds_samples:
                 s["dataset"] = n
@@ -1569,6 +1642,7 @@ def load_tag_dataset(
         include_options=include_options,
         mask_neighbor_labels=mask_neighbor_labels,
         neighbor_seed=neighbor_seed,
+        include_topology_edges=include_topology_edges,
     )
 
     # Apply class-level resampling for single-dataset path (boost / balance_classes).
@@ -1709,6 +1783,8 @@ def build_edge_sample(
     tokenizer,
     max_seq_len: int = 2048,
     mask_target_text: bool = False,
+    u_neighbor_edges: Optional[list[list[int]]] = None,
+    v_neighbor_edges: Optional[list[list[int]]] = None,
 ) -> dict:
     """Build a single LP sample. ``cls_label`` ∈ {0=no, 1=yes}.
 
@@ -1769,6 +1845,7 @@ def build_edge_sample(
     node_spans: list[list[int]] = []
     node_roles: list[int] = []
     node_hops: list[int] = []
+    u_span_idx_map = {0: 0}
 
     u_text_start = len(input_ids)
     input_ids.extend(paper_a_prefix + paper_a_body)
@@ -1790,6 +1867,7 @@ def build_edge_sample(
         node_spans.append([s, len(input_ids)])
         node_roles.append(LP_ROLE_NBR_U)
         node_hops.append(hop)
+        u_span_idx_map[idx + 1] = len(node_spans) - 1
 
     # ---- Build v side ----
     v_text_start = len(input_ids)
@@ -1798,6 +1876,8 @@ def build_edge_sample(
     node_spans.append([v_text_start, v_text_end])
     node_roles.append(LP_ROLE_TARGET)
     node_hops.append(0)
+    v_target_idx = len(node_spans) - 1
+    v_span_idx_map = {0: v_target_idx}
 
     for idx, (nb_text, hop) in enumerate(zip(v_neighbor_texts, v_neighbor_hops)):
         if len(input_ids) >= max_seq_len - len(q_toks) - 1:
@@ -1812,6 +1892,7 @@ def build_edge_sample(
         node_spans.append([s, len(input_ids)])
         node_roles.append(LP_ROLE_NBR_V)
         node_hops.append(hop)
+        v_span_idx_map[idx + 1] = len(node_spans) - 1
 
     # ---- Question + answer ----
     q_start = len(input_ids)
@@ -1822,6 +1903,7 @@ def build_edge_sample(
     node_spans.append([q_start, q_end])
     node_roles.append(LP_ROLE_QUESTION)
     node_hops.append(0)
+    q_idx = len(node_spans) - 1
 
     # Enforce hard cap.
     if len(input_ids) > max_seq_len:
@@ -1845,7 +1927,7 @@ def build_edge_sample(
     if label_token_pos < len(labels):
         labels[label_token_pos] = answer_token
 
-    return {
+    result = {
         "input_ids": input_ids,
         "labels": labels,
         "node_spans": node_spans,
@@ -1855,6 +1937,20 @@ def build_edge_sample(
         "label_token_pos": label_token_pos,
         "answer_len": 1,
     }
+    if u_neighbor_edges is not None or v_neighbor_edges is not None:
+        node_edges: list[list[int]] = []
+        for a, b in u_neighbor_edges or []:
+            if a in u_span_idx_map and b in u_span_idx_map:
+                node_edges.append([u_span_idx_map[a], u_span_idx_map[b]])
+        for a, b in v_neighbor_edges or []:
+            if a in v_span_idx_map and b in v_span_idx_map:
+                node_edges.append([v_span_idx_map[a], v_span_idx_map[b]])
+        node_edges.extend([[q_idx, 0], [q_idx, v_target_idx]])
+        n_spans = len(node_spans)
+        result["node_edges"] = [
+            [a, b] for a, b in node_edges if a < n_spans and b < n_spans
+        ]
+    return result
 
 
 def _truncate_text_for_neighbor(node_data: dict, nb_id: int) -> str:
@@ -1888,6 +1984,43 @@ def _sample_lp_neighbors(
     v_ids2 = [nb for nb, _ in v_kept]
     v_hops2 = [hop for _, hop in v_kept]
     return u_ids2, u_hops2, v_ids2, v_hops2
+
+
+def _sample_lp_neighbors_with_edges(
+    adj: dict[int, list[int]],
+    u: int,
+    v: int,
+    max_neighbors_per_hop: int,
+    max_hops: int,
+    rng: random.Random,
+) -> tuple[list[int], list[int], list[list[int]], list[int], list[int], list[list[int]]]:
+    u_ids, u_hops, u_edges = _sample_khop_neighbors_with_edges(
+        adj, u, max_neighbors_per_hop, max_hops, rng
+    )
+    v_ids, v_hops, v_edges = _sample_khop_neighbors_with_edges(
+        adj, v, max_neighbors_per_hop, max_hops, rng
+    )
+
+    def _filter(ids, hops, edges, blocked):
+        idx_map = {0: 0}
+        kept_ids = []
+        kept_hops = []
+        for old_idx, (nb, hop) in enumerate(zip(ids, hops), start=1):
+            if nb == blocked:
+                continue
+            kept_ids.append(nb)
+            kept_hops.append(hop)
+            idx_map[old_idx] = len(kept_ids)
+        kept_edges = [
+            [idx_map[a], idx_map[b]]
+            for a, b in edges
+            if a in idx_map and b in idx_map
+        ]
+        return kept_ids, kept_hops, kept_edges
+
+    u_ids2, u_hops2, u_edges2 = _filter(u_ids, u_hops, u_edges, v)
+    v_ids2, v_hops2, v_edges2 = _filter(v_ids, v_hops, v_edges, u)
+    return u_ids2, u_hops2, u_edges2, v_ids2, v_hops2, v_edges2
 
 
 def _sample_hard_negative(
@@ -1936,6 +2069,7 @@ def _build_lp_samples(
     max_samples: int = 0,
     hard_neg_ratio: float = 0.0,
     pos_edge_set: set[tuple[int, int]] | None = None,
+    include_topology_edges: bool = False,
 ) -> list[dict]:
     rng = random.Random(seed)
     samples: list[dict] = []
@@ -1967,9 +2101,19 @@ def _build_lp_samples(
             break
         if u not in node_data or v not in node_data:
             continue
-        u_nb_ids, u_nb_hops, v_nb_ids, v_nb_hops = _sample_lp_neighbors(
-            adj_train, u, v, max_neighbors_per_hop, max_hops, rng
-        )
+        if include_topology_edges:
+            (
+                u_nb_ids, u_nb_hops, u_nb_edges,
+                v_nb_ids, v_nb_hops, v_nb_edges,
+            ) = _sample_lp_neighbors_with_edges(
+                adj_train, u, v, max_neighbors_per_hop, max_hops, rng
+            )
+        else:
+            u_nb_ids, u_nb_hops, v_nb_ids, v_nb_hops = _sample_lp_neighbors(
+                adj_train, u, v, max_neighbors_per_hop, max_hops, rng
+            )
+            u_nb_edges = None
+            v_nb_edges = None
         u_nb_texts = [_truncate_text_for_neighbor(node_data, nb) for nb in u_nb_ids]
         v_nb_texts = [_truncate_text_for_neighbor(node_data, nb) for nb in v_nb_ids]
         u_text = f"{node_data[u]['title']}. {node_data[u]['abstract']}"
@@ -1986,6 +2130,8 @@ def _build_lp_samples(
             tokenizer=tokenizer,
             max_seq_len=max_seq_len,
             mask_target_text=mask_target_text,
+            u_neighbor_edges=u_nb_edges,
+            v_neighbor_edges=v_nb_edges,
         )
         sample["edge"] = (int(u), int(v))
         samples.append(sample)
@@ -2005,18 +2151,21 @@ def load_lp_dataset(
     max_samples: int = 0,
     hard_neg_ratio: float = 0.0,
     use_llaga_split: bool = False,
+    include_topology_edges: bool = False,
 ) -> Dataset:
     """Load a link-prediction dataset and return an HF Dataset of LP samples.
 
-    Supports ``cora`` and ``ogbn-arxiv``.
+    Supports ``cora``, ``pubmed``, and ``ogbn-arxiv``.
     """
     if dataset_name == "cora":
         from dllm.data.datasets import cora_lp as lp_loader
+    elif dataset_name == "pubmed":
+        from dllm.data.datasets import pubmed_lp as lp_loader
     elif dataset_name == "ogbn-arxiv":
         from dllm.data.datasets import arxiv_lp as lp_loader
     else:
         raise NotImplementedError(
-            f"LP loader supports 'cora' and 'ogbn-arxiv'; got {dataset_name!r}"
+            f"LP loader supports 'cora', 'pubmed', and 'ogbn-arxiv'; got {dataset_name!r}"
         )
 
     config = DATASET_CONFIGS[dataset_name]
@@ -2049,12 +2198,13 @@ def load_lp_dataset(
         max_samples=max_samples,
         hard_neg_ratio=hard_neg_ratio,
         pos_edge_set=pos_edge_set,
+        include_topology_edges=include_topology_edges,
     )
     for s in samples:
         s["dataset"] = dataset_name
 
     dataset = Dataset.from_list(samples)
-    suffix = " [llaga-split]" if llaga_split_root else ""
+    suffix = " [llaga-split]" if use_llaga_split else ""
     dataset.info.description = (
         f"LP {dataset_name} ({split}){suffix} "
         f"pos={len(bundle['pos_edges'])} neg={len(bundle['neg_edges'])}"

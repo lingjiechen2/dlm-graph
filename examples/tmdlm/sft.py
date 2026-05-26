@@ -43,7 +43,10 @@ if int(os.environ.get("WORLD_SIZE", "1")) > 1:
 # this; NC's variable-length neighbor patterns + answer-token masking did.
 try:
     import torch as _torch_for_sdp
-    _torch_for_sdp.backends.cuda.enable_cudnn_sdp(False)
+    if os.environ.get("TMDLM_ENABLE_CUDNN_SDP", "0") == "1":
+        _torch_for_sdp.backends.cuda.enable_cudnn_sdp(True)
+    else:
+        _torch_for_sdp.backends.cuda.enable_cudnn_sdp(False)
 except Exception:
     pass
 
@@ -183,6 +186,12 @@ class DataArguments:
             "help": "Apply star-topology attention mask restricting neighbor-target attention"
         },
     )
+    topology_mask_type: str = field(
+        default="star",
+        metadata={
+            "help": "Topology mask type: star | khop_tree. star preserves existing behavior."
+        },
+    )
     balance_merged: bool = field(
         default=False,
         metadata={
@@ -276,6 +285,7 @@ def train():
             neg_ratio=data_args.lp_neg_ratio,
             hard_neg_ratio=data_args.lp_hard_neg_ratio,
             use_llaga_split=data_args.lp_use_llaga_split,
+            include_topology_edges=(data_args.topology_mask_type == "khop_tree"),
         )
         train_dataset = load_lp_dataset(
             ds_arg, split="train",
@@ -311,6 +321,7 @@ def train():
             balance_merged=data_args.balance_merged,
             resample_strategy=data_args.resample_strategy,
             boost_spec=data_args.boost_spec,
+            include_topology_edges=(data_args.topology_mask_type == "khop_tree"),
         )
         train_dataset = load_tag_dataset(
             ds_arg, split="train",
@@ -336,6 +347,7 @@ def train():
             return_tensors="pt",
             position_id_type=data_args.position_id_type,
             use_topology_mask=data_args.use_topology_mask,
+            topology_mask_type=data_args.topology_mask_type,
         ),
     )
     trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
