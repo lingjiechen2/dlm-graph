@@ -9,7 +9,7 @@ test split. All runs use 2-hop neighborhoods, 10 neighbors per hop,
 
 Rows are training/source datasets; columns are evaluation/target datasets.
 Diagonal cells are omitted because they are in-domain LP results covered in
-[current_results_summary.md](current_results_summary.md).
+[summary.md](summary.md).
 
 | Source checkpoint | Cora target | PubMed target | ogbn-arxiv target |
 |---|---:|---:|---:|

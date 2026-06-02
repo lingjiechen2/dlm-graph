@@ -884,4 +884,4 @@ LLaGA LP test splits. Accuracy / AUC matrix:
 | PubMed topo final | 88.82 / 0.9580 | -- | 94.51 / 0.9886 |
 | ogbn-arxiv topo final | 90.44 / 0.9627 | 94.08 / 0.9848 | -- |
 
-Full run details: [lp_cross_dataset_topo_results.md](lp_cross_dataset_topo_results.md).
+Full run details: [lp_cross_dataset.md](lp_cross_dataset.md).

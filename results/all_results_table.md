@@ -36,10 +36,10 @@ Frozen LLaDA details: [baselines/frozen_llada_lp.md](baselines/frozen_llada_lp.m
 
 ## Source Files
 
-- Current method results: [current_results_summary.md](current_results_summary.md), [current_results_detailed.md](current_results_detailed.md)
-- Neighbor sweep results: [neighbor_sweep_results.md](neighbor_sweep_results.md)
-- Frozen LLaDA LP baseline: [frozen_llada_lp_results.md](frozen_llada_lp_results.md)
-- LP cross-dataset transfer: [lp_cross_dataset_topo_results.md](lp_cross_dataset_topo_results.md)
+- Current method results: [ours/summary.md](ours/summary.md), [ours/detailed.md](ours/detailed.md)
+- Neighbor sweep results: [ours/neighbor_sweep.md](ours/neighbor_sweep.md)
+- LP cross-dataset transfer: [ours/lp_cross_dataset.md](ours/lp_cross_dataset.md)
+- Frozen LLaDA LP baseline: [baselines/frozen_llada_lp.md](baselines/frozen_llada_lp.md)
 - Local NC baselines: [baselines/simteg_nc.md](baselines/simteg_nc.md), [baselines/gnn_nc.md](baselines/gnn_nc.md)
 - Local LP baselines: [baselines/gnn_lp.md](baselines/gnn_lp.md)
 - Baseline category index: [baselines/README.md](baselines/README.md)

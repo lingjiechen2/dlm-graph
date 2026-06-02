@@ -31,7 +31,7 @@ Main takeaways:
 - ogbn-arxiv NC is the only task not above LLaGA-HO; full-train 3-epoch r=128 reaches 76.39, only 0.27 points short.
 
 Full NC in-domain, replication, and cross-dataset transfer details:
-[nc_experiment_results.md](nc_experiment_results.md).
+[nc_experiments.md](nc_experiments.md).
 
 ## Link Prediction
 
@@ -55,7 +55,7 @@ Main takeaways:
 | PubMed | 90.89* | 95.31 | +4.42 |
 | ogbn-arxiv | 95.25* | 96.55 | +1.30 |
 
-`*` Selected LP references use no-topo SFT evals: Cora `checkpoint-final` 85.88 / AUC 0.9574; PubMed `checkpoint-final` 90.89 / AUC 0.9889; ogbn-arxiv `checkpoint-712` 95.25 / AUC 0.9925. Full frozen zero-shot details: [baselines/frozen_llada_lp.md](baselines/frozen_llada_lp.md).
+`*` Selected LP references use no-topo SFT evals: Cora `checkpoint-final` 85.88 / AUC 0.9574; PubMed `checkpoint-final` 90.89 / AUC 0.9889; ogbn-arxiv `checkpoint-712` 95.25 / AUC 0.9925. Full frozen zero-shot details: [../baselines/frozen_llada_lp.md](../baselines/frozen_llada_lp.md).
 
 ## LP Cross-Dataset Transfer
 
@@ -68,7 +68,7 @@ off-diagonal accuracies above 88%.
 | PubMed topo final | 88.82 | -- | 94.51 |
 | ogbn-arxiv topo final | 90.44 | 94.08 | -- |
 
-Full accuracy/AUC details: [lp_cross_dataset_topo_results.md](lp_cross_dataset_topo_results.md).
+Full accuracy/AUC details: [lp_cross_dataset.md](lp_cross_dataset.md).
 
 ## Neighbor Sweep
 
@@ -77,13 +77,14 @@ for Cora, PubMed, and ogbn-arxiv NC/LP. The previous post-training eval default
 used `max_neighbors_per_hop=10`, which remains best for 5 of 6 rows; Cora NC
 peaks at `nb=3`.
 
-Full sweep table: [neighbor_sweep_results.md](neighbor_sweep_results.md).
+Full sweep table: [neighbor_sweep.md](neighbor_sweep.md).
 
 ## Related Files
 
-- Consolidated baseline comparison: [all_results_table.md](all_results_table.md)
-- Baseline category index: [baselines/README.md](baselines/README.md)
-- Frozen LLaDA LP baseline: [baselines/frozen_llada_lp.md](baselines/frozen_llada_lp.md)
-- LP cross-dataset transfer: [lp_cross_dataset_topo_results.md](lp_cross_dataset_topo_results.md)
-- Neighbor sweep results: [neighbor_sweep_results.md](neighbor_sweep_results.md)
-- Full current ledger: [current_results_detailed.md](current_results_detailed.md)
+- Consolidated baseline comparison: [../all_results_table.md](../all_results_table.md)
+- Baseline category index: [../baselines/README.md](../baselines/README.md)
+- Frozen LLaDA LP baseline: [../baselines/frozen_llada_lp.md](../baselines/frozen_llada_lp.md)
+- LP cross-dataset transfer: [lp_cross_dataset.md](lp_cross_dataset.md)
+- Neighbor sweep results: [neighbor_sweep.md](neighbor_sweep.md)
+- Full current ledger: [detailed.md](detailed.md)
+- NC experiments: [nc_experiments.md](nc_experiments.md)
