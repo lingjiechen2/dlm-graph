@@ -55,7 +55,7 @@ Main takeaways:
 | PubMed | 90.89* | 95.31 | +4.42 |
 | ogbn-arxiv | 95.25* | 96.55 | +1.30 |
 
-`*` Selected LP references use no-topo SFT evals: Cora `checkpoint-final` 85.88 / AUC 0.9574; PubMed `checkpoint-final` 90.89 / AUC 0.9889; ogbn-arxiv `checkpoint-712` 95.25 / AUC 0.9925. Full frozen zero-shot details: [frozen_llada_lp_results.md](frozen_llada_lp_results.md).
+`*` Selected LP references use no-topo SFT evals: Cora `checkpoint-final` 85.88 / AUC 0.9574; PubMed `checkpoint-final` 90.89 / AUC 0.9889; ogbn-arxiv `checkpoint-712` 95.25 / AUC 0.9925. Full frozen zero-shot details: [baselines/frozen_llada_lp.md](baselines/frozen_llada_lp.md).
 
 ## LP Cross-Dataset Transfer
 
@@ -82,8 +82,8 @@ Full sweep table: [neighbor_sweep_results.md](neighbor_sweep_results.md).
 ## Related Files
 
 - Consolidated baseline comparison: [all_results_table.md](all_results_table.md)
-- Frozen LLaDA LP baseline: [frozen_llada_lp_results.md](frozen_llada_lp_results.md)
+- Baseline category index: [baselines/README.md](baselines/README.md)
+- Frozen LLaDA LP baseline: [baselines/frozen_llada_lp.md](baselines/frozen_llada_lp.md)
 - LP cross-dataset transfer: [lp_cross_dataset_topo_results.md](lp_cross_dataset_topo_results.md)
 - Neighbor sweep results: [neighbor_sweep_results.md](neighbor_sweep_results.md)
 - Full current ledger: [current_results_detailed.md](current_results_detailed.md)
-- Baseline result index: [README.md](README.md#baseline-results)

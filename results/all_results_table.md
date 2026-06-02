@@ -31,7 +31,7 @@ Summary: TM-DLM is best among the tracked methods on 5 of 6 task-dataset pairs. 
 | PubMed | 90.89* | 95.31 | ckpt-744, LLaGA split | 91.41 | 89.18 | 89.74 | SGFormer | +3.90 | +5.57 |
 | ogbn-arxiv | 95.25* | 96.55 | ckpt-2492, LLaGA split | 91.24 | 94.15 | 94.67 | GCN | +2.40 | +1.88 |
 
-Frozen LLaDA details: [frozen_llada_lp_results.md](frozen_llada_lp_results.md).
+Frozen LLaDA details: [baselines/frozen_llada_lp.md](baselines/frozen_llada_lp.md).
 `*` Selected LP references use no-topo SFT evals: Cora `checkpoint-final` 85.88 / AUC 0.9574; PubMed `checkpoint-final` 90.89 / AUC 0.9889; ogbn-arxiv `checkpoint-712` 95.25 / AUC 0.9925.
 
 ## Source Files
@@ -40,5 +40,6 @@ Frozen LLaDA details: [frozen_llada_lp_results.md](frozen_llada_lp_results.md).
 - Neighbor sweep results: [neighbor_sweep_results.md](neighbor_sweep_results.md)
 - Frozen LLaDA LP baseline: [frozen_llada_lp_results.md](frozen_llada_lp_results.md)
 - LP cross-dataset transfer: [lp_cross_dataset_topo_results.md](lp_cross_dataset_topo_results.md)
-- Local NC baselines: [baselines/simteg_node_classification.md](baselines/simteg_node_classification.md)
-- Local LP baselines: [baselines/gnn_link_prediction.md](baselines/gnn_link_prediction.md)
+- Local NC baselines: [baselines/simteg_nc.md](baselines/simteg_nc.md), [baselines/gnn_nc.md](baselines/gnn_nc.md)
+- Local LP baselines: [baselines/gnn_lp.md](baselines/gnn_lp.md)
+- Baseline category index: [baselines/README.md](baselines/README.md)
