@@ -44,6 +44,22 @@ Pubmed dataset:
 * 7: GIN | 0.8829 | 0.8859 | 
 
 
+## Hetero Graph Performance
+(test accuracy %)
+| model | Cornell | Texas | Washington | Wisconsin |
+|---|---:|---:|---:|---:|
+| gcn | 59.0% | 65.8% | 68.1% | 56.6% |
+| sage | 69.2% | 81.6% | 85.1% | 90.6% |
+| gin | 48.7% | 60.5% | 61.7% | 58.5% |
+| gat | 51.3% | 57.9% | 63.8% | 56.6% |
+| gatv2 | 43.6% | 60.5% | 59.6% | 50.9% |
+| graphtransformer | 66.7% | 79.0% | 85.1% | 71.7% |
+| mixhop | 76.9% | 79.0% | 78.7% | 84.9% |
+| difformer | 74.4% | 79.0% | 85.1% | 92.5% |
+| sgformer | 53.9% | 65.8% | 57.5% | 47.2% |
+| nodeformer | 79.5% | 76.3% | 80.8% | 79.2% |
+
+
 ## Supported Models
 Because our improvements lean toward transformer-style designs, this adds comparisons with representative graph transformer architectures (best on PubMed is around 90%).
 - `gcn`
@@ -55,9 +71,7 @@ Because our improvements lean toward transformer-style designs, this adds compar
 - `difformer`
 - `sgformer`
 
-TODO: 
-- Full baseline result table.
-- GNN&GT+LLM embedding.
+
 
 ## Example Commands
 
