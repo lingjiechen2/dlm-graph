@@ -46,6 +46,7 @@ Pubmed dataset:
 
 ## Hetero Graph Performance
 (test accuracy %)
+node classification
 | model | Cornell | Texas | Washington | Wisconsin |
 |---|---:|---:|---:|---:|
 | gcn | 58.97% | 65.79% | 68.09% | 56.60% |
@@ -58,6 +59,20 @@ Pubmed dataset:
 | difformer | 74.36% | 78.95% | 85.11% | 92.45% |
 | sgformer | 53.85% | 65.79% | 57.45% | 47.17% |
 | nodeformer | 79.49% | 76.32% | 80.85% | 79.25% |
+
+link prediction
+| model | Cornell | Texas | Washington | Wisconsin |
+|---|---:|---:|---:|---:|
+| gcn | 75.93% | 61.61% | 70.55% | 75.82% |
+| sage | 62.96% | 71.43% | 71.23% | 70.33% |
+| gin | 50.00% | 58.04% | 54.11% | 59.89% |
+| gat | 50.00% | 50.00% | 50.00% | 50.00% |
+| gatv2 | 50.00% | 50.00% | 50.00% | 50.00% |
+| graphtransformer | 57.41% | 59.82% | 68.49% | 69.78% |
+| mixhop | 77.78% | 75.89% | 74.66% | 73.63% |
+| difformer | 70.37% | 76.79% | 72.60% | 69.78% |
+| sgformer | 65.74% | 82.14% | 77.40% | 70.33% |
+| nodeformer | 68.52% | 73.21% | 72.60% | 50.00% |
 
 
 ## Supported Models
